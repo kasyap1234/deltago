@@ -1,0 +1,24 @@
+api:
+  base_url: "https://api.india.delta.exchange"
+  websocket_url: "wss://socket.india.delta.exchange"
+  api_key: "${DELTA_API_KEY}"
+  api_secret: "${DELTA_API_SECRET}"
+  testnet: false
+
+strategy:
+  underlyings:
+    - "BTC"
+    - "ETH"
+  straddle:
+    enabled: true
+    entry_time: "11:30"  # IST - 6 hours before 5:30 PM expiry
+    position_size: 1
+  iron_condor:
+    enabled: true
+    short_delta: 0.25    # ~84% probability of profit
+    wing_width: 2        # 2 strikes for protective wings
+    position_size: 1
+
+risk:
+  stop_loss_multiplier: 1.5  # Exit if loss = 1.5x premium collected
+  max_daily_loss: 1000       # USD - halt trading if exceeded
