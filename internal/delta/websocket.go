@@ -185,7 +185,7 @@ func (w *WebSocketClient) handleMessage(message []byte) {
 
 	// Handle different message types
 	switch msg.Type {
-	case "auth":
+	case "auth", "key-auth":
 		if msg.Success {
 			log.Println("WebSocket authenticated successfully")
 		} else {

@@ -26,8 +26,8 @@ type APIConfig struct {
 
 // StrategyConfig holds trading strategy configuration
 type StrategyConfig struct {
-	Underlyings []string        `yaml:"underlyings"`
-	Straddle    StraddleConfig  `yaml:"straddle"`
+	Underlyings []string         `yaml:"underlyings"`
+	Straddle    StraddleConfig   `yaml:"straddle"`
 	IronCondor  IronCondorConfig `yaml:"iron_condor"`
 }
 

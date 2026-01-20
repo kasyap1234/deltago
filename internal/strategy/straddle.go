@@ -56,22 +56,25 @@ func (s *Straddle) Execute() (*StraddlePosition, error) {
 		return nil, fmt.Errorf("failed to find ATM options: %w", err)
 	}
 
-	// 3. Calculate entry prices (use best bid for selling)
-	callBid, err := strconv.ParseFloat(atmCall.Quotes.BestBid, 64)
+	// 3. Calculate entry prices
+	// For SELL orders with post_only, we need to place AT or ABOVE the best ask
+	// to ensure the order rests on the book (maker). Using best ask price.
+	callAsk, err := strconv.ParseFloat(atmCall.Quotes.BestAsk, 64)
 	if err != nil {
-		return nil, fmt.Errorf("invalid call bid price: %w", err)
+		return nil, fmt.Errorf("invalid call ask price: %w", err)
 	}
-	putBid, err := strconv.ParseFloat(atmPut.Quotes.BestBid, 64)
+	putAsk, err := strconv.ParseFloat(atmPut.Quotes.BestAsk, 64)
 	if err != nil {
-		return nil, fmt.Errorf("invalid put bid price: %w", err)
+		return nil, fmt.Errorf("invalid put ask price: %w", err)
 	}
 
 	// 4. Place sell orders for both call and put
+	// Sell at best ask to ensure maker execution (order rests on book)
 	callOrder, err := s.client.SellOption(
 		atmCall.Symbol,
 		atmCall.ProductID,
 		s.positionSize,
-		atmCall.Quotes.BestBid, // Sell at bid for maker
+		atmCall.Quotes.BestAsk, // Sell at ask to be maker
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sell call: %w", err)
@@ -81,7 +84,7 @@ func (s *Straddle) Execute() (*StraddlePosition, error) {
 		atmPut.Symbol,
 		atmPut.ProductID,
 		s.positionSize,
-		atmPut.Quotes.BestBid, // Sell at bid for maker
+		atmPut.Quotes.BestAsk, // Sell at ask to be maker
 	)
 	if err != nil {
 		// Try to cancel the call order if put fails
@@ -89,8 +92,8 @@ func (s *Straddle) Execute() (*StraddlePosition, error) {
 		return nil, fmt.Errorf("failed to sell put: %w", err)
 	}
 
-	// 5. Calculate total premium and max loss
-	totalPremium := (callBid + putBid) * float64(s.positionSize)
+	// 5. Calculate total premium and max loss (use ask price as expected fill)
+	totalPremium := (callAsk + putAsk) * float64(s.positionSize)
 	maxLoss := totalPremium * s.stopLossMulti
 
 	s.activePosition = &StraddlePosition{
@@ -103,8 +106,8 @@ func (s *Straddle) Execute() (*StraddlePosition, error) {
 		MaxLoss:        maxLoss,
 		EntryTime:      time.Now(),
 		Underlying:     s.underlying,
-		CallEntryPrice: callBid,
-		PutEntryPrice:  putBid,
+		CallEntryPrice: callAsk,
+		PutEntryPrice:  putAsk,
 	}
 
 	return s.activePosition, nil

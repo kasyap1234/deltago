@@ -56,6 +56,7 @@ func (a *Auth) generateSignature(message string) string {
 }
 
 // SignWebSocket generates authentication payload for WebSocket connection
+// Uses new "key-auth" method (old "auth" deprecated after Dec 31, 2025)
 func (a *Auth) SignWebSocket() map[string]interface{} {
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	method := "GET"
@@ -65,7 +66,7 @@ func (a *Auth) SignWebSocket() map[string]interface{} {
 	signature := a.generateSignature(message)
 
 	return map[string]interface{}{
-		"type": "auth",
+		"type": "key-auth",
 		"payload": map[string]string{
 			"api-key":   a.apiKey,
 			"timestamp": timestamp,

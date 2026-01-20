@@ -139,22 +139,24 @@ func (ic *IronCondor) Execute() (*IronCondorPosition, error) {
 
 	// Note: Batch orders require same product, so we need individual orders
 	// This is a limitation - we'll place them sequentially with maker flag
-	_, err = ic.client.SellOption(shortCall.Symbol, shortCall.ProductID, ic.positionSize, shortCall.Quotes.BestBid)
+	// For SELL: use best ask (order rests on book)
+	// For BUY: use best bid (order rests on book)
+	_, err = ic.client.SellOption(shortCall.Symbol, shortCall.ProductID, ic.positionSize, shortCall.Quotes.BestAsk)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sell short call: %w", err)
 	}
 
-	_, err = ic.client.BuyOption(longCall.Symbol, longCall.ProductID, ic.positionSize, longCall.Quotes.BestAsk)
+	_, err = ic.client.BuyOption(longCall.Symbol, longCall.ProductID, ic.positionSize, longCall.Quotes.BestBid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to buy long call: %w", err)
 	}
 
-	_, err = ic.client.SellOption(shortPut.Symbol, shortPut.ProductID, ic.positionSize, shortPut.Quotes.BestBid)
+	_, err = ic.client.SellOption(shortPut.Symbol, shortPut.ProductID, ic.positionSize, shortPut.Quotes.BestAsk)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sell short put: %w", err)
 	}
 
-	_, err = ic.client.BuyOption(longPut.Symbol, longPut.ProductID, ic.positionSize, longPut.Quotes.BestAsk)
+	_, err = ic.client.BuyOption(longPut.Symbol, longPut.ProductID, ic.positionSize, longPut.Quotes.BestBid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to buy long put: %w", err)
 	}

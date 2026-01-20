@@ -1,9 +1,9 @@
 api:
-  base_url: "https://api.india.delta.exchange"
-  websocket_url: "wss://socket.india.delta.exchange"
+  base_url: "https://cdn-ind.testnet.deltaex.org"
+  websocket_url: "wss://socket-ind.testnet.delta.exchange"
   api_key: "${DELTA_API_KEY}"
   api_secret: "${DELTA_API_SECRET}"
-  testnet: false
+  testnet: true
 
 strategy:
   underlyings:

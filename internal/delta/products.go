@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -68,6 +69,7 @@ func (c *Client) GetTicker(symbol string) (*Ticker, error) {
 }
 
 // GetDailyExpiryOptions returns options expiring today for the given underlying
+// Falls back to the nearest available expiry if today's options don't exist (e.g., on testnet)
 func (c *Client) GetDailyExpiryOptions(underlying string) ([]Ticker, error) {
 	// Get today's date in the format expected by the API
 	ist, err := time.LoadLocation("Asia/Kolkata")
@@ -78,7 +80,30 @@ func (c *Client) GetDailyExpiryOptions(underlying string) ([]Ticker, error) {
 	today := time.Now().In(ist)
 	expiryDate := today.Format("02-01-2006") // DD-MM-YYYY
 
-	return c.GetOptionChain(underlying, expiryDate)
+	options, err := c.GetOptionChain(underlying, expiryDate)
+	if err != nil {
+		return nil, err
+	}
+
+	// If we found options for today, return them
+	if len(options) > 0 {
+		return options, nil
+	}
+
+	// Fallback: Try the next few days (testnet may not have same-day expiry)
+	for i := 1; i <= 7; i++ {
+		nextDay := today.AddDate(0, 0, i)
+		expiryDate = nextDay.Format("02-01-2006")
+		options, err = c.GetOptionChain(underlying, expiryDate)
+		if err != nil {
+			continue
+		}
+		if len(options) > 0 {
+			return options, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no options found for %s in the next 7 days", underlying)
 }
 
 // FindATMOptions finds the at-the-money call and put options for daily expiry
@@ -142,6 +167,11 @@ func (c *Client) FindOTMOptionsByDelta(underlying string, targetDelta float64, s
 			puts = append(puts, opt)
 		}
 	}
+
+	// Sort calls by strike (ascending)
+	sortByStrike(calls)
+	// Sort puts by strike (descending for easier wing selection)
+	sortByStrike(puts)
 
 	// Find OTM call with delta closest to target (e.g., 0.25)
 	var shortCallIdx int = -1
@@ -232,4 +262,13 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+// sortByStrike sorts tickers by strike price in ascending order
+func sortByStrike(tickers []Ticker) {
+	sort.Slice(tickers, func(i, j int) bool {
+		strikeI, _ := strconv.ParseFloat(tickers[i].StrikePrice, 64)
+		strikeJ, _ := strconv.ParseFloat(tickers[j].StrikePrice, 64)
+		return strikeI < strikeJ
+	})
 }
