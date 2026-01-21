@@ -25,7 +25,7 @@ jobs:
 
       - name: Create deployment script
         run: |
-          cat > /tmp/deploy.sh << 'SCRIPT'
+          cat > /tmp/deploy.sh << 'SCRIPT_END'
           #!/bin/bash
           set -e
           
@@ -37,10 +37,10 @@ jobs:
           echo "API Secret length: ${#DELTA_API_SECRET}"
 
           if [ -z "$DELTA_API_KEY" ] || [ -z "$DELTA_API_SECRET" ]; then
-              echo "❌ ERROR: Missing API credentials!"
+              echo "ERROR: Missing API credentials!"
               exit 1
           fi
-          echo "✅ Secrets are present"
+          echo "Secrets are present"
 
           # Install dependencies
           if ! command -v git &> /dev/null; then
@@ -80,10 +80,8 @@ jobs:
 
           # Setup Environment - write directly to env file
           echo "Setting up environment variables..."
-          sudo bash -c "cat > /etc/deltago/env << ENVFILE
-DELTA_API_KEY=$DELTA_API_KEY
-DELTA_API_SECRET=$DELTA_API_SECRET
-ENVFILE"
+          echo "DELTA_API_KEY=$DELTA_API_KEY" | sudo tee /etc/deltago/env > /dev/null
+          echo "DELTA_API_SECRET=$DELTA_API_SECRET" | sudo tee -a /etc/deltago/env > /dev/null
           sudo chmod 600 /etc/deltago/env
 
           # Service Management
@@ -96,8 +94,14 @@ ENVFILE"
 
           echo "=== Deployment Complete ==="
           sudo systemctl status $SERVICE_NAME --no-pager
-          SCRIPT
+          SCRIPT_END
           chmod +x /tmp/deploy.sh
+
+      - name: Copy script to VM
+        run: |
+          gcloud compute scp /tmp/deploy.sh instance-20260120-151422:/tmp/deploy.sh \
+            --zone "us-central1-c" \
+            --project "side-479110"
 
       - name: Deploy to VM
         env:
@@ -105,11 +109,6 @@ ENVFILE"
           DELTA_API_SECRET: ${{ secrets.DELTA_API_SECRET }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          # Copy script to VM and execute with environment variables
-          gcloud compute scp /tmp/deploy.sh instance-20260120-151422:/tmp/deploy.sh \
-            --zone "us-central1-c" \
-            --project "side-479110"
-          
           gcloud compute ssh --zone "us-central1-c" "instance-20260120-151422" \
             --project "side-479110" \
-            --command "DELTA_API_KEY='$DELTA_API_KEY' DELTA_API_SECRET='$DELTA_API_SECRET' GITHUB_REPOSITORY='$GITHUB_REPOSITORY' bash /tmp/deploy.sh"
+            --command "export DELTA_API_KEY='$DELTA_API_KEY' DELTA_API_SECRET='$DELTA_API_SECRET' GITHUB_REPOSITORY='$GITHUB_REPOSITORY' && bash /tmp/deploy.sh"
