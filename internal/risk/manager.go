@@ -24,6 +24,7 @@ type Manager struct {
 	strategies      []StopLossChecker
 	stopChan        chan struct{}
 	mu              sync.Mutex
+	checkMu         sync.Mutex // Prevents concurrent stop-loss checks
 	dailyPnL        float64
 	monitorInterval time.Duration
 	isRunning       bool
@@ -112,6 +113,13 @@ func (m *Manager) monitorLoop() {
 }
 
 func (m *Manager) checkAllStopLosses() {
+	// Use trylock pattern to prevent concurrent stop-loss checks
+	// This avoids double-closing positions from WS updates + polling
+	if !m.checkMu.TryLock() {
+		return // Another check is already in progress
+	}
+	defer m.checkMu.Unlock()
+
 	m.mu.Lock()
 	strategies := make([]StopLossChecker, len(m.strategies))
 	copy(strategies, m.strategies)

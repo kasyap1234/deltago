@@ -12,15 +12,22 @@ import (
 
 // WebSocketClient handles real-time data from Delta Exchange
 type WebSocketClient struct {
-	url         string
-	auth        *Auth
-	conn        *websocket.Conn
-	done        chan struct{}
-	reconnect   bool
-	mu          sync.Mutex
-	handlers    map[string][]func(json.RawMessage)
-	isConnected bool
-	pingTicker  *time.Ticker
+	url           string
+	auth          *Auth
+	conn          *websocket.Conn
+	done          chan struct{}
+	reconnect     bool
+	mu            sync.Mutex
+	handlers      map[string][]func(json.RawMessage)
+	isConnected   bool
+	pingTicker    *time.Ticker
+	subscriptions []subscriptionInfo // Track subscriptions for reconnect
+	closeOnce     sync.Once          // Prevent double-close panic
+}
+
+type subscriptionInfo struct {
+	channel string
+	symbols []string
 }
 
 // PositionUpdate represents a position update from WebSocket
@@ -49,11 +56,28 @@ func NewWebSocketClient(wsURL string, auth *Auth) *WebSocketClient {
 
 // Connect establishes WebSocket connection and authenticates
 func (w *WebSocketClient) Connect() error {
+	return w.connectInternal(false)
+}
+
+// connectInternal handles connection with reconnect flag
+func (w *WebSocketClient) connectInternal(isReconnect bool) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
+
+	// Stop old ping ticker if reconnecting
+	if w.pingTicker != nil {
+		w.pingTicker.Stop()
+		w.pingTicker = nil
+	}
+
+	// Close old connection if any
+	if w.conn != nil {
+		w.conn.Close()
+		w.conn = nil
+	}
 
 	conn, _, err := websocket.DefaultDialer.Dial(w.url, nil)
 	if err != nil {
+		w.mu.Unlock()
 		return fmt.Errorf("failed to connect to WebSocket: %w", err)
 	}
 
@@ -63,15 +87,22 @@ func (w *WebSocketClient) Connect() error {
 	// Authenticate
 	authMsg := w.auth.SignWebSocket()
 	if err := conn.WriteJSON(authMsg); err != nil {
+		w.mu.Unlock()
 		return fmt.Errorf("failed to send auth message: %w", err)
 	}
 
 	// Start ping ticker to keep connection alive
 	w.pingTicker = time.NewTicker(30 * time.Second)
-	go w.keepAlive()
+	w.mu.Unlock()
 
-	// Start message reader
+	go w.keepAlive()
 	go w.readMessages()
+
+	// Resubscribe to all channels after reconnect
+	if isReconnect {
+		log.Println("Resubscribing to channels after reconnect...")
+		w.resubscribeAll()
+	}
 
 	return nil
 }
@@ -84,6 +115,9 @@ func (w *WebSocketClient) Subscribe(channel string, symbols []string) error {
 	if !w.isConnected {
 		return fmt.Errorf("WebSocket not connected")
 	}
+
+	// Track subscription for reconnect
+	w.subscriptions = append(w.subscriptions, subscriptionInfo{channel: channel, symbols: symbols})
 
 	msg := map[string]interface{}{
 		"type": "subscribe",
@@ -98,6 +132,40 @@ func (w *WebSocketClient) Subscribe(channel string, symbols []string) error {
 	}
 
 	return w.conn.WriteJSON(msg)
+}
+
+// resubscribeAll re-subscribes to all previously subscribed channels
+func (w *WebSocketClient) resubscribeAll() {
+	w.mu.Lock()
+	subs := make([]subscriptionInfo, len(w.subscriptions))
+	copy(subs, w.subscriptions)
+	w.mu.Unlock()
+
+	for _, sub := range subs {
+		w.mu.Lock()
+		if !w.isConnected {
+			w.mu.Unlock()
+			return
+		}
+
+		msg := map[string]interface{}{
+			"type": "subscribe",
+			"payload": map[string]interface{}{
+				"channels": []map[string]interface{}{
+					{
+						"name":    sub.channel,
+						"symbols": sub.symbols,
+					},
+				},
+			},
+		}
+		err := w.conn.WriteJSON(msg)
+		w.mu.Unlock()
+
+		if err != nil {
+			log.Printf("Failed to resubscribe to %s: %v", sub.channel, err)
+		}
+	}
 }
 
 // SubscribePositions subscribes to position updates for all symbols
@@ -149,7 +217,7 @@ func (w *WebSocketClient) readMessages() {
 		if w.reconnect {
 			log.Println("WebSocket disconnected, attempting reconnect...")
 			time.Sleep(5 * time.Second)
-			if err := w.Connect(); err != nil {
+			if err := w.connectInternal(true); err != nil { // Use connectInternal with reconnect=true
 				log.Printf("Reconnection failed: %v", err)
 			}
 		}
@@ -194,12 +262,14 @@ func (w *WebSocketClient) handleMessage(message []byte) {
 	case "subscriptions":
 		log.Printf("Subscription confirmed: %s", string(message))
 	case "positions":
-		w.dispatchHandlers("positions", message)
+		// Dispatch the Result payload, not the full envelope
+		w.dispatchHandlers("positions", msg.Result)
 	case "v2/ticker":
-		w.dispatchHandlers("v2/ticker", message)
+		// Dispatch the Result payload, not the full envelope
+		w.dispatchHandlers("v2/ticker", msg.Result)
 	default:
 		// For other message types, try to dispatch based on type
-		w.dispatchHandlers(msg.Type, message)
+		w.dispatchHandlers(msg.Type, msg.Result)
 	}
 }
 
@@ -233,16 +303,23 @@ func (w *WebSocketClient) keepAlive() {
 
 // Close closes the WebSocket connection
 func (w *WebSocketClient) Close() error {
-	w.reconnect = false
-	close(w.done)
+	var err error
+	w.closeOnce.Do(func() {
+		w.reconnect = false
+		close(w.done)
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
+		w.mu.Lock()
+		defer w.mu.Unlock()
 
-	if w.conn != nil {
-		return w.conn.Close()
-	}
-	return nil
+		if w.pingTicker != nil {
+			w.pingTicker.Stop()
+		}
+
+		if w.conn != nil {
+			err = w.conn.Close()
+		}
+	})
+	return err
 }
 
 // IsConnected returns whether the WebSocket is connected

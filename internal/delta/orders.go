@@ -7,11 +7,8 @@ import (
 )
 
 // PlaceOrder places a single order
-// Uses post_only=true to ensure maker fees
+// PostOnly is controlled by the caller - do not override
 func (c *Client) PlaceOrder(req CreateOrderRequest) (*Order, error) {
-	// Ensure post_only is true for lowest fees
-	req.PostOnly = true
-
 	resp, err := c.doRequest("POST", "/v2/orders", nil, req)
 	if err != nil {
 		return nil, err
@@ -148,6 +145,7 @@ func (c *Client) BuyOption(productSymbol string, productID int64, size int, limi
 }
 
 // ClosePosition places a reduce-only order to close a position
+// Uses IOC (Immediate Or Cancel) and NO post_only to ensure execution
 func (c *Client) ClosePosition(productSymbol string, productID int64, size int, side OrderSide, limitPrice string) (*Order, error) {
 	return c.PlaceOrder(CreateOrderRequest{
 		ProductID:     productID,
@@ -156,8 +154,8 @@ func (c *Client) ClosePosition(productSymbol string, productID int64, size int, 
 		Side:          side,
 		OrderType:     OrderTypeLimit,
 		LimitPrice:    limitPrice,
-		TimeInForce:   TimeInForceGTC,
-		PostOnly:      true,
+		TimeInForce:   TimeInForceIOC, // IOC for immediate execution
+		PostOnly:      false,          // Allow crossing spread for exits
 		ReduceOnly:    true,
 	})
 }

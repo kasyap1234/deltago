@@ -160,36 +160,45 @@ func (s *Straddle) ClosePosition() error {
 		return fmt.Errorf("no active position to close")
 	}
 
+	var errs []string
+
 	// Get current prices for closing
 	callTicker, err := s.client.GetTicker(s.activePosition.CallSymbol)
 	if err != nil {
-		return fmt.Errorf("failed to get call ticker: %w", err)
+		errs = append(errs, fmt.Sprintf("failed to get call ticker: %v", err))
+	} else {
+		// Close by buying back using ClosePosition (IOC, reduce-only, no post-only)
+		_, err = s.client.ClosePosition(
+			s.activePosition.CallSymbol,
+			s.activePosition.CallProductID,
+			s.activePosition.Size,
+			delta.OrderSideBuy,
+			callTicker.Quotes.BestAsk,
+		)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("failed to buy back call: %v", err))
+		}
 	}
 
 	putTicker, err := s.client.GetTicker(s.activePosition.PutSymbol)
 	if err != nil {
-		return fmt.Errorf("failed to get put ticker: %w", err)
+		errs = append(errs, fmt.Sprintf("failed to get put ticker: %v", err))
+	} else {
+		_, err = s.client.ClosePosition(
+			s.activePosition.PutSymbol,
+			s.activePosition.PutProductID,
+			s.activePosition.Size,
+			delta.OrderSideBuy,
+			putTicker.Quotes.BestAsk,
+		)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("failed to buy back put: %v", err))
+		}
 	}
 
-	// Close by buying back (use best ask for buying)
-	_, err = s.client.BuyOption(
-		s.activePosition.CallSymbol,
-		s.activePosition.CallProductID,
-		s.activePosition.Size,
-		callTicker.Quotes.BestAsk,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to buy back call: %w", err)
-	}
-
-	_, err = s.client.BuyOption(
-		s.activePosition.PutSymbol,
-		s.activePosition.PutProductID,
-		s.activePosition.Size,
-		putTicker.Quotes.BestAsk,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to buy back put: %w", err)
+	// Only clear position if all closes succeeded
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to close some legs: %v", errs)
 	}
 
 	s.activePosition = nil

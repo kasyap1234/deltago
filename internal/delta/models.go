@@ -163,6 +163,7 @@ type Position struct {
 	LiquidationPrice string `json:"liquidation_price"`
 	BankruptcyPrice  string `json:"bankruptcy_price"`
 	RealizedPnL      string `json:"realized_pnl"`
+	UnrealizedPnL    string `json:"unrealized_pnl"`
 	Commission       string `json:"commission"`
 	AutoTopup        bool   `json:"auto_topup"`
 	CreatedAt        string `json:"created_at"`

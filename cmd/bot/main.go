@@ -108,8 +108,8 @@ func main() {
 	if *forceEntry {
 		log.Println("⚡ Force entry mode - executing strategies now...")
 		executeStrategies(straddles, condors, *dryRun)
-	} else if cfg.Strategy.Straddle.Enabled {
-		// Schedule entry at configured time
+	} else if cfg.Strategy.Straddle.Enabled || cfg.Strategy.IronCondor.Enabled {
+		// Schedule entry at configured time (for any enabled strategy)
 		go scheduleEntry(cfg, straddles, condors, *dryRun)
 	}
 
