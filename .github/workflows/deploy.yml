@@ -37,6 +37,11 @@ jobs:
               export DELTA_API_KEY="${{ secrets.DELTA_API_KEY }}"
               export DELTA_API_SECRET="${{ secrets.DELTA_API_SECRET }}"
               
+              echo "Checking secrets..."
+              if [ -z "$DELTA_API_KEY" ]; then echo "❌ DELTA_API_KEY is missing!"; exit 1; fi
+              if [ -z "$DELTA_API_SECRET" ]; then echo "❌ DELTA_API_SECRET is missing!"; exit 1; fi
+              echo "✅ Secrets are present (Key length: ${#DELTA_API_KEY})"
+
               DEPLOY_DIR="/opt/deltago"
               SERVICE_NAME="deltago"
 
