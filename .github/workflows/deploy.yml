@@ -111,4 +111,4 @@ jobs:
         run: |
           gcloud compute ssh --zone "us-central1-c" "instance-20260120-151422" \
             --project "side-479110" \
-            --command "export DELTA_API_KEY='$DELTA_API_KEY' DELTA_API_SECRET='$DELTA_API_SECRET' GITHUB_REPOSITORY='$GITHUB_REPOSITORY' && bash /tmp/deploy.sh"
+            --command "DELTA_API_KEY='$DELTA_API_KEY' DELTA_API_SECRET='$DELTA_API_SECRET' GITHUB_REPOSITORY='$GITHUB_REPOSITORY' bash /tmp/deploy.sh"
