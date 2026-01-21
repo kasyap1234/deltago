@@ -1,0 +1,17 @@
+[Unit]
+Description=DeltaGo Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/deltago
+ExecStart=/opt/deltago/bot
+EnvironmentFile=/etc/deltago/env
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
