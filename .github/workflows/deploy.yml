@@ -24,15 +24,17 @@ jobs:
           project_id: side-479110
 
       - name: Create env file locally
+        env:
+          DELTA_API_KEY: ${{ secrets.DELTA_API_KEY }}
+          DELTA_API_SECRET: ${{ secrets.DELTA_API_SECRET }}
         run: |
           echo "Creating env file with secrets..."
           echo "API Key length: ${#DELTA_API_KEY}"
           echo "API Secret length: ${#DELTA_API_SECRET}"
-          echo "DELTA_API_KEY=${{ secrets.DELTA_API_KEY }}" > /tmp/deltago.env
-          echo "DELTA_API_SECRET=${{ secrets.DELTA_API_SECRET }}" >> /tmp/deltago.env
-          echo "Env file content (redacted):"
-          cat /tmp/deltago.env | sed 's/=.*/=***REDACTED***/'
-          echo "Env file size: $(wc -c < /tmp/deltago.env) bytes"
+          printf 'DELTA_API_KEY=%s\n' "$DELTA_API_KEY" > /tmp/deltago.env
+          printf 'DELTA_API_SECRET=%s\n' "$DELTA_API_SECRET" >> /tmp/deltago.env
+          echo "Env file created with $(wc -c < /tmp/deltago.env) bytes"
+
 
       - name: Copy files to VM
         run: |
