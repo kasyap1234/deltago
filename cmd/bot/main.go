@@ -48,7 +48,7 @@ func main() {
 
 	// Verify connectivity
 	if err := verifyConnectivity(client); err != nil {
-		log.Fatalf("Failed to connect to Delta Exchange: %v", err)
+		log.Fatalf("Failed to connect to Delta Exchange : %v", err)
 	}
 	log.Println("✅ Connected to Delta Exchange")
 
