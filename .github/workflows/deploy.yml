@@ -23,92 +23,70 @@ jobs:
         with:
           project_id: side-479110
 
-      - name: Create deployment script
+      - name: Create env file locally
         run: |
-          cat > /tmp/deploy.sh << 'SCRIPT_END'
-          #!/bin/bash
-          set -e
-          
-          DEPLOY_DIR="/opt/deltago"
-          SERVICE_NAME="deltago"
+          echo "DELTA_API_KEY=${{ secrets.DELTA_API_KEY }}" > /tmp/deltago.env
+          echo "DELTA_API_SECRET=${{ secrets.DELTA_API_SECRET }}" >> /tmp/deltago.env
 
-          echo "=== DeltaGo Deployment Script ==="
-          echo "API Key length: ${#DELTA_API_KEY}"
-          echo "API Secret length: ${#DELTA_API_SECRET}"
-
-          if [ -z "$DELTA_API_KEY" ] || [ -z "$DELTA_API_SECRET" ]; then
-              echo "ERROR: Missing API credentials!"
-              exit 1
-          fi
-          echo "Secrets are present"
-
-          # Install dependencies
-          if ! command -v git &> /dev/null; then
-              echo "Installing Git..."
-              sudo apt-get update && sudo apt-get install -y git
-          fi
-
-          if [ ! -d "/usr/local/go" ]; then
-              echo "Installing Go..."
-              wget -q https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
-              sudo rm -rf /usr/local/go
-              sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
-              rm go1.22.0.linux-amd64.tar.gz
-          fi
-
-          # Setup directories
-          sudo mkdir -p $DEPLOY_DIR
-          sudo chown $USER:$USER $DEPLOY_DIR
-          sudo mkdir -p /etc/deltago
-
-          # Update code
-          if [ -d "$DEPLOY_DIR/.git" ]; then
-              echo "Updating existing repository..."
-              cd $DEPLOY_DIR
-              git fetch origin
-              git reset --hard origin/main
-          else
-              echo "Cloning repository..."
-              rm -rf $DEPLOY_DIR/*
-              git clone https://github.com/$GITHUB_REPOSITORY.git $DEPLOY_DIR
-          fi
-
-          # Build
-          echo "Building Go binary..."
-          cd $DEPLOY_DIR/cmd/bot
-          /usr/local/go/bin/go build -o $DEPLOY_DIR/bot .
-
-          # Setup Environment - write directly to env file
-          echo "Setting up environment variables..."
-          echo "DELTA_API_KEY=$DELTA_API_KEY" | sudo tee /etc/deltago/env > /dev/null
-          echo "DELTA_API_SECRET=$DELTA_API_SECRET" | sudo tee -a /etc/deltago/env > /dev/null
-          sudo chmod 600 /etc/deltago/env
-
-          # Service Management
-          echo "Installing systemd service..."
-          sudo cp $DEPLOY_DIR/deploy/deltago.service /etc/systemd/system/
-          sudo systemctl daemon-reload
-          sudo systemctl stop $SERVICE_NAME 2>/dev/null || true
-          sudo systemctl enable $SERVICE_NAME
-          sudo systemctl restart $SERVICE_NAME
-
-          echo "=== Deployment Complete ==="
-          sudo systemctl status $SERVICE_NAME --no-pager
-          SCRIPT_END
-          chmod +x /tmp/deploy.sh
-
-      - name: Copy script to VM
+      - name: Copy files to VM
         run: |
-          gcloud compute scp /tmp/deploy.sh instance-20260120-151422:/tmp/deploy.sh \
+          gcloud compute scp /tmp/deltago.env instance-20260120-151422:/tmp/deltago.env \
             --zone "us-central1-c" \
             --project "side-479110"
 
       - name: Deploy to VM
-        env:
-          DELTA_API_KEY: ${{ secrets.DELTA_API_KEY }}
-          DELTA_API_SECRET: ${{ secrets.DELTA_API_SECRET }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           gcloud compute ssh --zone "us-central1-c" "instance-20260120-151422" \
             --project "side-479110" \
-            --command "DELTA_API_KEY='$DELTA_API_KEY' DELTA_API_SECRET='$DELTA_API_SECRET' GITHUB_REPOSITORY='$GITHUB_REPOSITORY' bash /tmp/deploy.sh"
+            --command "
+              set -e
+              DEPLOY_DIR=/opt/deltago
+              SERVICE_NAME=deltago
+              GITHUB_REPOSITORY=${{ github.repository }}
+
+              echo '=== DeltaGo Deployment Script ==='
+
+              # Install git if needed
+              if ! command -v git > /dev/null; then
+                echo 'Installing Git...'
+                sudo apt-get update && sudo apt-get install -y git
+              fi
+
+              # Setup directories
+              sudo mkdir -p \$DEPLOY_DIR
+              sudo chown \$USER:\$USER \$DEPLOY_DIR
+              sudo mkdir -p /etc/deltago
+
+              # Update code
+              if [ -d \"\$DEPLOY_DIR/.git\" ]; then
+                echo 'Updating repository...'
+                cd \$DEPLOY_DIR
+                git fetch origin
+                git reset --hard origin/main
+              else
+                echo 'Cloning repository...'
+                rm -rf \$DEPLOY_DIR/*
+                git clone https://github.com/\$GITHUB_REPOSITORY.git \$DEPLOY_DIR
+              fi
+
+              # Build
+              echo 'Building Go binary...'
+              cd \$DEPLOY_DIR/cmd/bot
+              /usr/local/go/bin/go build -o \$DEPLOY_DIR/bot .
+
+              # Setup env file from the one we copied
+              echo 'Setting up environment...'
+              sudo cp /tmp/deltago.env /etc/deltago/env
+              sudo chmod 600 /etc/deltago/env
+
+              # Service management
+              echo 'Setting up systemd service...'
+              sudo cp \$DEPLOY_DIR/deploy/deltago.service /etc/systemd/system/
+              sudo systemctl daemon-reload
+              sudo systemctl stop \$SERVICE_NAME 2>/dev/null || true
+              sudo systemctl enable \$SERVICE_NAME
+              sudo systemctl restart \$SERVICE_NAME
+
+              echo '=== Deployment Complete ==='
+              sudo systemctl status \$SERVICE_NAME --no-pager
+            "
