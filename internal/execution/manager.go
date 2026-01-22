@@ -236,12 +236,12 @@ type RetryConfig struct {
 	AllowCrossing bool // Allow crossing spread on final retry
 }
 
-// DefaultRetryConfig provides sensible defaults
+// DefaultRetryConfig provides sensible defaults for low-liquidity options
 var DefaultRetryConfig = RetryConfig{
-	MaxRetries:    3,
-	PriceStepPct:  0.001, // 0.1% per retry
+	MaxRetries:    5,
+	PriceStepPct:  0.02, // 2% per retry - aggressive for options
 	RetryInterval: 2 * time.Second,
-	AllowCrossing: true,
+	AllowCrossing: true, // Allow taker on final retry for guaranteed fill
 }
 
 // PlaceWithRetry places an order with retry logic and price walking
@@ -284,9 +284,9 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 				}
 			}
 
-			// On final retry, allow crossing spread ONLY if not PostOnly
-			// If PostOnly is forced by user, we never cross.
-			if attempt == cfg.MaxRetries && cfg.AllowCrossing && !req.PostOnly {
+			// On final retry, allow crossing spread to guarantee fill
+			// This pays taker fee but ensures execution
+			if attempt == cfg.MaxRetries && cfg.AllowCrossing {
 				req.PostOnly = false
 				req.TimeInForce = "ioc"
 			}
