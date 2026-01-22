@@ -264,6 +264,33 @@ func abs(x float64) float64 {
 	return x
 }
 
+// GetOHLCV fetches OHLCV candles for a symbol
+// resolution: "1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "1d", "1w", "2w"
+// Returns up to 2000 candles maximum
+func (c *Client) GetOHLCV(symbol string, resolution string, startTime, endTime time.Time) ([]OHLCCandle, error) {
+	query := url.Values{}
+	query.Set("symbol", symbol)
+	query.Set("resolution", resolution)
+	query.Set("start", fmt.Sprintf("%d", startTime.Unix()))
+	query.Set("end", fmt.Sprintf("%d", endTime.Unix()))
+
+	resp, err := c.doPublicRequest("GET", "/v2/history/candles", query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch OHLCV: %w", err)
+	}
+
+	var result OHLCResponse
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse OHLCV response: %w", err)
+	}
+
+	if !result.Success {
+		return nil, fmt.Errorf("API returned success=false for OHLCV request")
+	}
+
+	return result.Result, nil
+}
+
 // sortByStrike sorts tickers by strike price in ascending order
 func sortByStrike(tickers []Ticker) {
 	sort.Slice(tickers, func(i, j int) bool {

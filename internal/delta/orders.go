@@ -159,3 +159,50 @@ func (c *Client) ClosePosition(productSymbol string, productID int64, size int, 
 		ReduceOnly:    true,
 	})
 }
+
+// GetOrderHistory fetches the final state of an order from history
+// This is critical for verifying if an order was filled, cancelled, or rejected
+func (c *Client) GetOrderHistory(orderID int64) (*Order, error) {
+	query := url.Values{}
+	query.Set("order_id", fmt.Sprintf("%d", orderID))
+
+	resp, err := c.doRequest("GET", "/v2/orders/history", query, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result APIResponse[[]Order]
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse order history response: %w", err)
+	}
+
+	if !result.Success || len(result.Result) == 0 {
+		return nil, fmt.Errorf("order %d not found in history", orderID)
+	}
+
+	return &result.Result[0], nil
+}
+
+// GetFills fetches fill records for verification
+// productID can be nil to get all fills
+func (c *Client) GetFills(productID *int64, since int64) ([]Fill, error) {
+	query := url.Values{}
+	if since > 0 {
+		query.Set("start_time", fmt.Sprintf("%d", since))
+	}
+	if productID != nil {
+		query.Set("product_id", fmt.Sprintf("%d", *productID))
+	}
+
+	resp, err := c.doRequest("GET", "/v2/fills", query, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result APIResponse[[]Fill]
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse fills response: %w", err)
+	}
+
+	return result.Result, nil
+}

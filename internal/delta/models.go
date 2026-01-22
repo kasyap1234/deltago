@@ -153,6 +153,22 @@ type Order struct {
 	ClientOrderID  string    `json:"client_order_id,omitempty"`
 }
 
+// Fill represents a trade fill
+type Fill struct {
+	ID            int64     `json:"id"`
+	OrderID       int64     `json:"order_id"`
+	ProductID     int64     `json:"product_id"`
+	ProductSymbol string    `json:"product_symbol"`
+	Size          int       `json:"size"`
+	FillType      string    `json:"fill_type"` // "normal", "liquidation"
+	Side          OrderSide `json:"side"`
+	Price         string    `json:"price"`
+	Role          string    `json:"role"` // "maker", "taker"
+	Commission    string    `json:"commission"`
+	CreatedAt     string    `json:"created_at"`
+	Timestamp     int64     `json:"timestamp"`
+}
+
 // Position represents an open position
 type Position struct {
 	ProductID        int64  `json:"product_id"`
@@ -241,4 +257,20 @@ func (p *Product) IsCall() bool {
 // IsPut returns true if the product is a put option
 func (p *Product) IsPut() bool {
 	return p.ContractType == "put_options"
+}
+
+// OHLCCandle represents a candlestick data point
+type OHLCCandle struct {
+	Time   int64   `json:"time"` // Unix timestamp in seconds
+	Open   float64 `json:"open"`
+	High   float64 `json:"high"`
+	Low    float64 `json:"low"`
+	Close  float64 `json:"close"`
+	Volume float64 `json:"volume"`
+}
+
+// OHLCResponse is the response for GET /v2/history/candles
+type OHLCResponse struct {
+	Success bool         `json:"success"`
+	Result  []OHLCCandle `json:"result"`
 }
