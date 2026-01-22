@@ -117,6 +117,8 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 		StrategyID: strategyID,
 		Timeout:    60 * time.Second,
 		AllOrNone:  true,
+		UseRetry:   true,
+		RetryCfg:   execution.DefaultRetryConfig,
 		Legs: []execution.OrderRequest{
 			{
 				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lc", now),

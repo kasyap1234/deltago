@@ -199,8 +199,10 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 	return &execution.MultiLegOrder{
 		Metadata:   metadata,
 		StrategyID: strategyID,
-		Timeout:    90 * time.Second,
+		Timeout:    120 * time.Second,
 		AllOrNone:  true,
+		UseRetry:   true,
+		RetryCfg:   execution.DefaultRetryConfig,
 		Legs: []execution.OrderRequest{
 			// Long call (protection) - BUY FIRST
 			{

@@ -141,6 +141,8 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 		StrategyID: strategyID,
 		Timeout:    60 * time.Second,
 		AllOrNone:  true,
+		UseRetry:   true,
+		RetryCfg:   execution.DefaultRetryConfig,
 		Legs: []execution.OrderRequest{
 			{
 				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lc", now),

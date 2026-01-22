@@ -100,8 +100,10 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	return &execution.MultiLegOrder{
 		Metadata:   metadata,
 		StrategyID: strategyID,
-		Timeout:    30 * time.Second,
+		Timeout:    60 * time.Second,
 		AllOrNone:  true,
+		UseRetry:   true,
+		RetryCfg:   execution.DefaultRetryConfig,
 		Legs: []execution.OrderRequest{
 			{
 				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lp", now),
