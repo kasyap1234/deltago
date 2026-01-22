@@ -66,6 +66,8 @@ type State struct {
 	// Track strategy entries for P&L calculation
 	StrategyEntries map[string][]LegEntry // strategyID -> legs
 
+	Costs TransactionCosts
+
 	AsOf time.Time
 }
 
@@ -76,6 +78,7 @@ func NewState(initialEquity float64, maxDailyLoss float64) *State {
 		MaxDailyLoss:    maxDailyLoss,
 		Positions:       make(map[int64]*Position),
 		StrategyEntries: make(map[string][]LegEntry),
+		Costs:           DefaultTransactionCosts(),
 		AsOf:            time.Now(),
 	}
 }
@@ -230,6 +233,36 @@ func (s *State) recalculateGreeks() {
 		s.Greeks.NetTheta += p.Theta * qty
 		s.Greeks.NetVega += p.Vega * qty
 	}
+}
+
+// TransactionCosts models fees and slippage
+type TransactionCosts struct {
+	MakerFeeRate float64 // e.g., 0.0001 (0.01%)
+	TakerFeeRate float64 // e.g., 0.0005 (0.05%)
+	SlippageBps  float64 // Expected slippage in basis points
+}
+
+func DefaultTransactionCosts() TransactionCosts {
+	return TransactionCosts{
+		MakerFeeRate: 0.0001, // 0.01%
+		TakerFeeRate: 0.0005, // 0.05%
+		SlippageBps:  5,      // 5 bps typical slippage
+	}
+}
+
+func (tc TransactionCosts) EstimateCost(notional float64, isMaker bool, legs int) float64 {
+	feeRate := tc.TakerFeeRate
+	if isMaker {
+		feeRate = tc.MakerFeeRate
+	}
+
+	// Fee per leg
+	fees := notional * feeRate * float64(legs)
+
+	// Slippage (both entry and exit, so 2x)
+	slippage := notional * (tc.SlippageBps / 10000) * 2 * float64(legs)
+
+	return fees + slippage
 }
 
 // RiskLimits defines portfolio risk constraints

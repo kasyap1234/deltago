@@ -109,6 +109,9 @@ type Manager interface {
 	
 	// GetFills gets recent fills
 	GetFills(ctx context.Context, since time.Time) ([]Fill, error)
+
+	// PlaceWithRetry places an order with retry logic and price walking
+	PlaceWithRetry(ctx context.Context, req OrderRequest, timeout time.Duration, cfg RetryConfig) (*OrderState, error)
 }
 
 // MultiLegOrder represents a multi-leg options order
@@ -116,7 +119,10 @@ type MultiLegOrder struct {
 	StrategyID string
 	Legs       []OrderRequest
 	Timeout    time.Duration
-	AllOrNone  bool // If true, cancel all if any leg fails
+	AllOrNone  bool        // If true, cancel all if any leg fails
+	Metadata   any         // Strategy-specific metadata (e.g., expected greeks)
+	UseRetry   bool        // If true, use price walking retry logic
+	RetryCfg   RetryConfig // Custom retry config
 }
 
 // MultiLegResult tracks the result of a multi-leg execution
@@ -150,7 +156,15 @@ func ExecuteMultiLeg(ctx context.Context, mgr Manager, order MultiLegOrder) (*Mu
 	
 	// Execute buy legs first (protection)
 	for _, leg := range buyLegs {
-		state, err := mgr.PlaceAndWait(ctx, leg, order.Timeout)
+		var state *OrderState
+		var err error
+		
+		if order.UseRetry {
+			state, err = mgr.PlaceWithRetry(ctx, leg, order.Timeout, order.RetryCfg)
+		} else {
+			state, err = mgr.PlaceAndWait(ctx, leg, order.Timeout)
+		}
+		
 		result.LegResults[leg.LegID] = state
 		
 		if err != nil || (state != nil && state.Status != StatusFilled) {
@@ -179,7 +193,15 @@ func ExecuteMultiLeg(ctx context.Context, mgr Manager, order MultiLegOrder) (*Mu
 	
 	// Execute sell legs (now protected by buy legs)
 	for _, leg := range sellLegs {
-		state, err := mgr.PlaceAndWait(ctx, leg, order.Timeout)
+		var state *OrderState
+		var err error
+		
+		if order.UseRetry {
+			state, err = mgr.PlaceWithRetry(ctx, leg, order.Timeout, order.RetryCfg)
+		} else {
+			state, err = mgr.PlaceAndWait(ctx, leg, order.Timeout)
+		}
+		
 		result.LegResults[leg.LegID] = state
 		
 		if err != nil || (state != nil && state.Status != StatusFilled) {

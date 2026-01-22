@@ -9,13 +9,23 @@ import (
 	"github.com/kiwhtas/deltago/internal/delta"
 )
 
+// DeltaClient defines the interface for Delta Exchange operations needed by the manager
+type DeltaClient interface {
+	PlaceOrder(req delta.CreateOrderRequest) (*delta.Order, error)
+	CancelOrder(orderID int64, productID int64) error
+	GetActiveOrders(productID *int64) ([]delta.Order, error)
+	GetOrderHistory(orderID int64) (*delta.Order, error)
+	GetFills(productID *int64, since int64) ([]delta.Fill, error)
+	GetPosition(productID int64) (*delta.Position, error)
+}
+
 // DeltaManager implements Manager for Delta Exchange
 type DeltaManager struct {
-	client *delta.Client
+	client DeltaClient
 }
 
 // NewDeltaManager creates a new execution manager
-func NewDeltaManager(client *delta.Client) *DeltaManager {
+func NewDeltaManager(client DeltaClient) *DeltaManager {
 	return &DeltaManager{client: client}
 }
 
@@ -217,6 +227,70 @@ func (m *DeltaManager) PlaceAndWait(ctx context.Context, req OrderRequest, timeo
 	return state, state.Error
 }
 
+// RetryConfig configures order retry behavior
+type RetryConfig struct {
+	MaxRetries    int
+	PriceStepPct  float64       // How much to walk price each retry
+	RetryInterval time.Duration
+	AllowCrossing bool // Allow crossing spread on final retry
+}
+
+// DefaultRetryConfig provides sensible defaults
+var DefaultRetryConfig = RetryConfig{
+	MaxRetries:    3,
+	PriceStepPct:  0.001, // 0.1% per retry
+	RetryInterval: 2 * time.Second,
+	AllowCrossing: true,
+}
+
+// PlaceWithRetry places an order with retry logic and price walking
+func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, timeout time.Duration, cfg RetryConfig) (*OrderState, error) {
+	originalPrice := req.Price
+	
+	for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
+		if attempt > 0 {
+			// Wait before retry
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(cfg.RetryInterval):
+			}
+			
+			// Walk the price
+			stepAmount := originalPrice * cfg.PriceStepPct * float64(attempt)
+			if req.Side == Buy {
+				req.Price = originalPrice + stepAmount // Bid higher
+			} else {
+				req.Price = originalPrice - stepAmount // Offer lower
+			}
+			
+			// On final retry, allow crossing spread
+			if attempt == cfg.MaxRetries && cfg.AllowCrossing {
+				req.PostOnly = false
+				req.TimeInForce = "ioc"
+			}
+			
+			// log.Printf("Retry %d/%d: adjusting price to %.4f", attempt, cfg.MaxRetries, req.Price)
+		}
+		
+		state, err := m.PlaceAndWait(ctx, req, timeout/time.Duration(cfg.MaxRetries+1))
+		if err != nil {
+			continue // Try again
+		}
+		
+		if state.Status == StatusFilled {
+			return state, nil
+		}
+		
+		if state.Status == StatusPartial && state.FilledQty > 0 {
+			// Partial fill - update qty for next attempt
+			req.Qty = state.RemainingQty()
+		}
+	}
+	
+	return nil, fmt.Errorf("failed after %d retries", cfg.MaxRetries)
+}
+
 func (m *DeltaManager) Cancel(ctx context.Context, exchangeOrderID int64, instrumentID int64) error {
 	return m.client.CancelOrder(exchangeOrderID, instrumentID)
 }
@@ -242,8 +316,23 @@ func (m *DeltaManager) GetOrder(ctx context.Context, exchangeOrderID int64) (*Or
 }
 
 func (m *DeltaManager) GetFills(ctx context.Context, since time.Time) ([]Fill, error) {
-	// TODO: implement via Delta API fills endpoint
-	return nil, nil
+	fills, err := m.client.GetFills(nil, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+
+	execFills := make([]Fill, 0, len(fills))
+	for _, f := range fills {
+		execFills = append(execFills, Fill{
+			ExchangeOrderID: f.OrderID,
+			InstrumentID:    f.ProductID,
+			Symbol:          f.ProductSymbol,
+			Side:            Side(f.Side),
+			Qty:             f.Size,
+			Timestamp:       time.Unix(f.Timestamp, 0),
+		})
+	}
+	return execFills, nil
 }
 
 func mapOrderState(state string) OrderStatus {

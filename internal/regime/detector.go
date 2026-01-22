@@ -228,12 +228,28 @@ func ema(prices []float64, period int) float64 {
 		return 0
 	}
 
-	multiplier := 2.0 / float64(period+1)
-	emaVal := prices[0]
-
-	for i := 1; i < len(prices); i++ {
-		emaVal = (prices[i]-emaVal)*multiplier + emaVal
+	// Use only the last 'period * 3' prices for stable EMA
+	// (EMA needs ~3x period to stabilize)
+	startIdx := 0
+	if len(prices) > period*3 {
+		startIdx = len(prices) - period*3
 	}
+
+	data := prices[startIdx:]
+
+	// Initialize with SMA of first 'period' values
+	sum := 0.0
+	for i := 0; i < period; i++ {
+		sum += data[i]
+	}
+	emaVal := sum / float64(period)
+
+	// Calculate EMA for remaining values
+	multiplier := 2.0 / float64(period+1)
+	for i := period; i < len(data); i++ {
+		emaVal = (data[i]-emaVal)*multiplier + emaVal
+	}
+
 	return emaVal
 }
 
@@ -243,34 +259,86 @@ func (d *Detector) computeADX() float64 {
 	}
 
 	n := len(d.priceHistory)
-	var sumDX float64
+	period := d.ADXPeriod
 
-	for i := n - d.ADXPeriod; i < n; i++ {
-		if i < 1 {
-			continue
-		}
-		upMove := d.highHistory[i] - d.highHistory[i-1]
-		downMove := d.lowHistory[i-1] - d.lowHistory[i]
+	// Calculate True Range, +DM, -DM series
+	tr := make([]float64, n-1)
+	plusDM := make([]float64, n-1)
+	minusDM := make([]float64, n-1)
 
-		var plusDM, minusDM float64
+	for i := 1; i < n; i++ {
+		high := d.highHistory[i]
+		low := d.lowHistory[i]
+		prevHigh := d.highHistory[i-1]
+		prevLow := d.lowHistory[i-1]
+		prevClose := d.priceHistory[i-1]
+
+		// True Range
+		tr[i-1] = max3(
+			high-low,
+			math.Abs(high-prevClose),
+			math.Abs(low-prevClose),
+		)
+
+		// Directional Movement
+		upMove := high - prevHigh
+		downMove := prevLow - low
+
 		if upMove > downMove && upMove > 0 {
-			plusDM = upMove
+			plusDM[i-1] = upMove
 		}
 		if downMove > upMove && downMove > 0 {
-			minusDM = downMove
-		}
-
-		tr := math.Max(d.highHistory[i]-d.lowHistory[i],
-			math.Max(math.Abs(d.highHistory[i]-d.priceHistory[i-1]),
-				math.Abs(d.lowHistory[i]-d.priceHistory[i-1])))
-
-		if tr > 0 {
-			dx := math.Abs(plusDM-minusDM) / (plusDM + minusDM + 0.0001) * 100
-			sumDX += dx
+			minusDM[i-1] = downMove
 		}
 	}
 
-	return sumDX / float64(d.ADXPeriod)
+	// Wilder smoothing
+	atr := wilderSmooth(tr, period)
+	smoothPlusDM := wilderSmooth(plusDM, period)
+	smoothMinusDM := wilderSmooth(minusDM, period)
+
+	if len(atr) == 0 || atr[len(atr)-1] == 0 {
+		return 20
+	}
+
+	// Calculate +DI and -DI
+	plusDI := (smoothPlusDM[len(smoothPlusDM)-1] / atr[len(atr)-1]) * 100
+	minusDI := (smoothMinusDM[len(smoothMinusDM)-1] / atr[len(atr)-1]) * 100
+
+	// Calculate DX
+	diSum := plusDI + minusDI
+	if diSum == 0 {
+		return 20
+	}
+	dx := (math.Abs(plusDI-minusDI) / diSum) * 100
+
+	return dx
+}
+
+func wilderSmooth(data []float64, period int) []float64 {
+	if len(data) < period {
+		return nil
+	}
+
+	result := make([]float64, len(data)-period+1)
+
+	// First value is simple average
+	sum := 0.0
+	for i := 0; i < period; i++ {
+		sum += data[i]
+	}
+	result[0] = sum / float64(period)
+
+	// Subsequent values use Wilder smoothing
+	for i := period; i < len(data); i++ {
+		result[i-period+1] = result[i-period] - (result[i-period] / float64(period)) + data[i]
+	}
+
+	return result
+}
+
+func max3(a, b, c float64) float64 {
+	return math.Max(a, math.Max(b, c))
 }
 
 func (d *Detector) computeTrendScore(fs *FeatureSet) float64 {

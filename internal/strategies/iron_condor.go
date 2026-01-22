@@ -136,11 +136,68 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 		return nil, fmt.Errorf("negative net credit: %.2f", netCredit)
 	}
 
+	// Check if credit covers transaction costs (require 2x costs)
+	costs := in.Portfolio.Costs.EstimateCost(netCredit, true, 4) // 4 legs, maker (PostOnly)
+	if netCredit < costs*2 {
+		return nil, fmt.Errorf("insufficient edge after costs: credit=%.2f costs=%.2f", netCredit, costs)
+	}
+
+	// Prepare metadata for risk checks
+	longCallStrike := parseFloat(longCall.StrikePrice)
+	longPutStrike := parseFloat(longPut.StrikePrice)
+	
+	legs := []Leg{
+		{
+			ID: "short_call", InstrumentID: shortCall.ProductID, Symbol: shortCall.Symbol,
+			Side: execution.Sell, Qty: s.PositionSize, EntryPrice: shortCallPrice,
+			Strike: shortCallStrike,
+			Delta: parseFloat(shortCall.Greeks.Delta), Gamma: parseFloat(shortCall.Greeks.Gamma),
+		},
+		{
+			ID: "short_put", InstrumentID: shortPut.ProductID, Symbol: shortPut.Symbol,
+			Side: execution.Sell, Qty: s.PositionSize, EntryPrice: shortPutPrice,
+			Strike: shortPutStrike,
+			Delta: parseFloat(shortPut.Greeks.Delta), Gamma: parseFloat(shortPut.Greeks.Gamma),
+		},
+		{
+			ID: "long_call", InstrumentID: longCall.ProductID, Symbol: longCall.Symbol,
+			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: longCallPrice,
+			Strike: longCallStrike,
+			Delta: parseFloat(longCall.Greeks.Delta), Gamma: parseFloat(longCall.Greeks.Gamma),
+		},
+		{
+			ID: "long_put", InstrumentID: longPut.ProductID, Symbol: longPut.Symbol,
+			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: longPutPrice,
+			Strike: longPutStrike,
+			Delta: parseFloat(longPut.Greeks.Delta), Gamma: parseFloat(longPut.Greeks.Gamma),
+		},
+	}
+	
+	maxSpreadWidth := 0.0
+	if width := longCallStrike - shortCallStrike; width > maxSpreadWidth {
+		maxSpreadWidth = width
+	}
+	if width := shortPutStrike - longPutStrike; width > maxSpreadWidth {
+		maxSpreadWidth = width
+	}
+	
+	maxLoss := (maxSpreadWidth * float64(s.PositionSize)) - netCredit
+	
+	metadata := &StrategyPositionMetadata{
+		NetPremium:    netCredit,
+		MaxLoss:       maxLoss,
+		MaxProfit:     netCredit,
+		BreakevenLow:  shortPutStrike - netCredit/float64(s.PositionSize),
+		BreakevenHigh: shortCallStrike + netCredit/float64(s.PositionSize),
+		Legs:          legs,
+	}
+
 	// REMOVED: Position assignment moved to ConfirmEntry()
 	// Position will only be set AFTER fills are verified
 
 	// Build orders - BUY protection legs FIRST
 	return &execution.MultiLegOrder{
+		Metadata:   metadata,
 		StrategyID: strategyID,
 		Timeout:    90 * time.Second,
 		AllOrNone:  true,
@@ -206,7 +263,7 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 }
 
 // ConfirmEntry sets the position state AFTER fills are verified
-func (s *IronCondor) ConfirmEntry(ctx context.Context, result *execution.MultiLegResult) error {
+func (s *IronCondor) ConfirmEntry(ctx context.Context, result *execution.MultiLegResult, metadata *StrategyPositionMetadata) error {
 	if !result.FullyFilled {
 		return fmt.Errorf("cannot confirm entry - not fully filled")
 	}
@@ -218,7 +275,18 @@ func (s *IronCondor) ConfirmEntry(ctx context.Context, result *execution.MultiLe
 			return fmt.Errorf("leg %s not filled: %s", legID, legState.Status)
 		}
 
-		// Build leg from actual fill data
+		// Find leg in metadata to get greeks and strike
+		var metaLeg *Leg
+		if metadata != nil {
+			for i := range metadata.Legs {
+				if metadata.Legs[i].ID == legID {
+					metaLeg = &metadata.Legs[i]
+					break
+				}
+			}
+		}
+
+		// Build leg from actual fill data and metadata
 		leg := Leg{
 			ID:           legID,
 			Symbol:       legState.Request.Symbol,
@@ -227,6 +295,16 @@ func (s *IronCondor) ConfirmEntry(ctx context.Context, result *execution.MultiLe
 			Qty:          legState.FilledQty,
 			EntryPrice:   legState.AvgFillPrice,
 		}
+
+		if metaLeg != nil {
+			leg.Strike = metaLeg.Strike
+			leg.Delta = metaLeg.Delta
+			leg.Gamma = metaLeg.Gamma
+			leg.Theta = metaLeg.Theta
+			leg.Vega = metaLeg.Vega
+			leg.OptionType = metaLeg.OptionType
+		}
+
 		legs = append(legs, leg)
 	}
 
@@ -240,30 +318,26 @@ func (s *IronCondor) ConfirmEntry(ctx context.Context, result *execution.MultiLe
 		}
 	}
 
-	// Find strikes for breakeven calculation
-	var shortCallStrike, shortPutStrike float64
-	var maxSpreadWidth float64
-	for _, leg := range legs {
-		if leg.ID == "short_call" {
-			shortCallStrike = leg.Strike
-		} else if leg.ID == "short_put" {
-			shortPutStrike = leg.Strike
-		}
-		if leg.ID == "long_call" && shortCallStrike > 0 {
-			width := leg.Strike - shortCallStrike
-			if width > maxSpreadWidth {
-				maxSpreadWidth = width
+	// Use metadata for breakevens if available, else calculate
+	var maxLoss, breakevenLow, breakevenHigh float64
+	if metadata != nil {
+		maxLoss = metadata.MaxLoss
+		breakevenLow = metadata.BreakevenLow
+		breakevenHigh = metadata.BreakevenHigh
+	} else {
+		// Fallback calculation logic
+		var shortCallStrike, shortPutStrike float64
+		for _, leg := range legs {
+			if leg.ID == "short_call" {
+				shortCallStrike = leg.Strike
+			} else if leg.ID == "short_put" {
+				shortPutStrike = leg.Strike
 			}
 		}
-		if leg.ID == "long_put" && shortPutStrike > 0 {
-			width := shortPutStrike - leg.Strike
-			if width > maxSpreadWidth {
-				maxSpreadWidth = width
-			}
-		}
+		// ... existing fallback ...
+		breakevenLow = shortPutStrike - netPremium/float64(s.PositionSize)
+		breakevenHigh = shortCallStrike + netPremium/float64(s.PositionSize)
 	}
-
-	maxLoss := (maxSpreadWidth * float64(s.PositionSize)) - netPremium
 
 	// NOW set the position with actual fill data
 	s.position = &StrategyPosition{
@@ -272,8 +346,8 @@ func (s *IronCondor) ConfirmEntry(ctx context.Context, result *execution.MultiLe
 		NetPremium:    netPremium,
 		MaxLoss:       maxLoss,
 		MaxProfit:     netPremium,
-		BreakevenLow:  shortPutStrike - netPremium/float64(s.PositionSize),
-		BreakevenHigh: shortCallStrike + netPremium/float64(s.PositionSize),
+		BreakevenLow:  breakevenLow,
+		BreakevenHigh: breakevenHigh,
 		Legs:          legs,
 	}
 

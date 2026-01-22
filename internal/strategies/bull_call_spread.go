@@ -98,7 +98,46 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 	now := time.Now()
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
+	longPrice := parseFloat(longCall.Quotes.BestAsk)
+	shortPrice := parseFloat(shortCall.Quotes.BestBid)
+	netDebit := longPrice - shortPrice
+
+	// Check if debit is positive
+	if netDebit <= 0 {
+		return nil, fmt.Errorf("negative net debit: %.2f", netDebit)
+	}
+
+	// Check transaction costs
+	costs := in.Portfolio.Costs.EstimateCost(netDebit, true, 2)
+	if (shortStrike-longStrike-netDebit) < costs*2 {
+		return nil, fmt.Errorf("insufficient edge after costs: edge=%.2f costs=%.2f", shortStrike-longStrike-netDebit, costs)
+	}
+
+	// Prepare metadata
+	legs := []Leg{
+		{
+			ID: "long_call", InstrumentID: longCall.ProductID, Symbol: longCall.Symbol,
+			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: longPrice,
+			Strike: longStrike, OptionType: "call",
+			Delta: parseFloat(longCall.Greeks.Delta), Gamma: parseFloat(longCall.Greeks.Gamma),
+		},
+		{
+			ID: "short_call", InstrumentID: shortCall.ProductID, Symbol: shortCall.Symbol,
+			Side: execution.Sell, Qty: s.PositionSize, EntryPrice: shortPrice,
+			Strike: shortStrike, OptionType: "call",
+			Delta: parseFloat(shortCall.Greeks.Delta), Gamma: parseFloat(shortCall.Greeks.Gamma),
+		},
+	}
+
+	metadata := &StrategyPositionMetadata{
+		NetPremium: -netDebit,
+		MaxLoss:    netDebit * float64(s.PositionSize),
+		MaxProfit:  (shortStrike - longStrike - netDebit) * float64(s.PositionSize),
+		Legs:       legs,
+	}
+
 	order := &execution.MultiLegOrder{
+		Metadata:   metadata,
 		StrategyID: strategyID,
 		Timeout:    60 * time.Second,
 		AllOrNone:  true,
@@ -109,7 +148,7 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 				Symbol:        longCall.Symbol,
 				Side:          execution.Buy,
 				Qty:           s.PositionSize,
-				Price:         parseFloat(longCall.Quotes.BestAsk),
+				Price:         longPrice,
 				OrderType:     execution.Limit,
 				PostOnly:      true,
 				TimeInForce:   "gtc",
@@ -122,7 +161,7 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 				Symbol:        shortCall.Symbol,
 				Side:          execution.Sell,
 				Qty:           s.PositionSize,
-				Price:         parseFloat(shortCall.Quotes.BestBid),
+				Price:         shortPrice,
 				OrderType:     execution.Limit,
 				PostOnly:      true,
 				TimeInForce:   "gtc",
@@ -139,53 +178,72 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 }
 
 // ConfirmEntry sets the position state AFTER fills are verified
-func (s *BullCallSpread) ConfirmEntry(ctx context.Context, result *execution.MultiLegResult) error {
+func (s *BullCallSpread) ConfirmEntry(ctx context.Context, result *execution.MultiLegResult, metadata *StrategyPositionMetadata) error {
 	if !result.FullyFilled {
 		return fmt.Errorf("cannot confirm entry - not fully filled")
 	}
 
 	// Extract actual fill data
-	var longLeg, shortLeg *Leg
+	legs := make([]Leg, 0, 2)
 	for legID, legState := range result.LegResults {
 		if legState.Status != execution.StatusFilled {
 			return fmt.Errorf("leg %s not filled: %s", legID, legState.Status)
 		}
 
-		leg := &Leg{
+		var metaLeg *Leg
+		if metadata != nil {
+			for i := range metadata.Legs {
+				if metadata.Legs[i].ID == legID {
+					metaLeg = &metadata.Legs[i]
+					break
+				}
+			}
+		}
+
+		leg := Leg{
 			ID:           legID,
 			Symbol:       legState.Request.Symbol,
 			InstrumentID: legState.Request.InstrumentID,
 			Side:         legState.Request.Side,
 			Qty:          legState.FilledQty,
 			EntryPrice:   legState.AvgFillPrice,
-			OptionType:   "call",
 		}
 
-		if legID == "long_call" {
-			longLeg = leg
-		} else if legID == "short_call" {
-			shortLeg = leg
+		if metaLeg != nil {
+			leg.Strike = metaLeg.Strike
+			leg.OptionType = metaLeg.OptionType
+			leg.Delta = metaLeg.Delta
+			leg.Gamma = metaLeg.Gamma
 		}
-	}
 
-	if longLeg == nil || shortLeg == nil {
-		return fmt.Errorf("missing legs: long=%v short=%v", longLeg != nil, shortLeg != nil)
+		legs = append(legs, leg)
 	}
 
 	// Calculate actual metrics from fills
-	netDebit := longLeg.EntryPrice - shortLeg.EntryPrice
-	maxLoss := netDebit * float64(s.PositionSize)
-	spreadWidth := shortLeg.Strike - longLeg.Strike
-	maxProfit := (spreadWidth - netDebit) * float64(s.PositionSize)
+	var netPremium, maxLoss, maxProfit float64
+	if metadata != nil {
+		// Re-calculate net premium from actual fills
+		actualNet := 0.0
+		for _, leg := range legs {
+			if leg.Side == execution.Buy {
+				actualNet -= leg.EntryPrice * float64(leg.Qty)
+			} else {
+				actualNet += leg.EntryPrice * float64(leg.Qty)
+			}
+		}
+		netPremium = actualNet
+		maxLoss = metadata.MaxLoss // Spread width doesn't change
+		maxProfit = metadata.MaxProfit
+	}
 
 	// NOW set the position with actual fill data
 	s.position = &StrategyPosition{
 		StrategyID: result.StrategyID,
 		EntryTime:  result.CompletedAt,
-		NetPremium: -netDebit,
+		NetPremium: netPremium,
 		MaxLoss:    maxLoss,
 		MaxProfit:  maxProfit,
-		Legs:       []Leg{*longLeg, *shortLeg},
+		Legs:       legs,
 	}
 
 	return nil

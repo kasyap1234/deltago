@@ -167,7 +167,11 @@ func (b *AdaptiveBot) runCycle(ctx context.Context) {
 	}
 
 	// 2. Update regime if needed
-	if time.Since(b.lastRegimeCheck) >= b.regimeInterval {
+	b.mu.RLock()
+	shouldUpdateRegime := time.Since(b.lastRegimeCheck) >= b.regimeInterval
+	b.mu.RUnlock()
+
+	if shouldUpdateRegime {
 		if err := b.updateRegime(ctx); err != nil {
 			log.Printf("Warning: regime update failed: %v", err)
 		}
@@ -401,30 +405,39 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 			continue
 		}
 
-		// Check risk limits
-		pos := strat.GetPosition()
-		additionalDelta := 0.0
-		additionalGamma := 0.0
-		if pos != nil {
-			for _, leg := range pos.Legs {
-				additionalDelta += leg.Delta * float64(leg.Qty)
-				additionalGamma += leg.Gamma * float64(leg.Qty)
-			}
-		}
-
-		if err := b.portfolio.CheckLimits(b.limits, additionalDelta, additionalGamma); err != nil {
-			log.Printf("Risk limit prevents entry for %s: %v", strat.Name(), err)
-			continue
-		}
-
-		// Build and execute entry orders
-		log.Printf("📈 %s: entering position (%s)", strat.Name(), reason)
-
+		// Build entry orders first to get expected greeks
 		multiLeg, err := strat.BuildEntryOrders(ctx, input)
 		if err != nil {
 			log.Printf("Error building entry orders for %s: %v", strat.Name(), err)
 			continue
 		}
+
+		// Calculate expected greeks from the ORDER
+		additionalDelta := 0.0
+		additionalGamma := 0.0
+
+		if multiLeg.Metadata != nil {
+			if meta, ok := multiLeg.Metadata.(*strategies.StrategyPositionMetadata); ok {
+				for _, leg := range meta.Legs {
+					qty := float64(leg.Qty)
+					if leg.Side == execution.Sell {
+						qty = -qty // Short positions have negative greeks contribution
+					}
+					additionalDelta += leg.Delta * qty
+					additionalGamma += leg.Gamma * qty
+				}
+			}
+		}
+
+		// Check risk limits with actual expected impact
+		if err := b.portfolio.CheckLimits(b.limits, additionalDelta, additionalGamma); err != nil {
+			log.Printf("Risk limit prevents entry for %s: %v (delta=%.2f gamma=%.4f)",
+				strat.Name(), err, additionalDelta, additionalGamma)
+			continue
+		}
+
+		// Execute entry orders
+		log.Printf("📈 %s: entering position (%s)", strat.Name(), reason)
 
 		result, err := execution.ExecuteMultiLeg(ctx, b.execMgr, *multiLeg)
 		if err != nil {
@@ -435,6 +448,16 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 		if result.FullyFilled {
 			// Record entry prices for P&L calculation
 			b.recordStrategyEntry(result)
+
+			// Confirm the position
+			var meta *strategies.StrategyPositionMetadata
+			if multiLeg.Metadata != nil {
+				meta, _ = multiLeg.Metadata.(*strategies.StrategyPositionMetadata)
+			}
+
+			if err := strat.ConfirmEntry(ctx, result, meta); err != nil {
+				log.Printf("Failed to confirm entry for %s: %v", strat.Name(), err)
+			}
 
 			pos := strat.GetPosition()
 			log.Printf("   ✅ Position opened: premium=%.2f max_loss=%.2f",

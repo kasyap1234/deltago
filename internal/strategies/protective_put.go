@@ -77,11 +77,28 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
 	putPrice := parseFloat(put.Quotes.BestAsk)
+	totalDebit := putPrice * float64(s.PositionSize)
 
-	// REMOVED: Position assignment moved to ConfirmEntry()
-	// Position will only be set AFTER fills are verified
+	// Prepare metadata
+	legs := []Leg{
+		{
+			ID: "long_put", InstrumentID: put.ProductID, Symbol: put.Symbol,
+			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: putPrice,
+			Strike: parseFloat(put.StrikePrice), OptionType: "put",
+			Delta: parseFloat(put.Greeks.Delta), Gamma: parseFloat(put.Greeks.Gamma),
+		},
+	}
+
+	metadata := &StrategyPositionMetadata{
+		NetPremium:   -totalDebit,
+		MaxLoss:      totalDebit,
+		MaxProfit:    parseFloat(put.StrikePrice) * float64(s.PositionSize),
+		BreakevenLow: parseFloat(put.StrikePrice) - putPrice,
+		Legs:         legs,
+	}
 
 	return &execution.MultiLegOrder{
+		Metadata:   metadata,
 		StrategyID: strategyID,
 		Timeout:    30 * time.Second,
 		AllOrNone:  true,
@@ -104,7 +121,7 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 }
 
 // ConfirmEntry sets the position state AFTER fills are verified
-func (s *ProtectivePut) ConfirmEntry(ctx context.Context, result *execution.MultiLegResult) error {
+func (s *ProtectivePut) ConfirmEntry(ctx context.Context, result *execution.MultiLegResult, metadata *StrategyPositionMetadata) error {
 	if !result.FullyFilled {
 		return fmt.Errorf("cannot confirm entry - not fully filled")
 	}
@@ -115,6 +132,11 @@ func (s *ProtectivePut) ConfirmEntry(ctx context.Context, result *execution.Mult
 		return fmt.Errorf("long_put leg not filled")
 	}
 
+	var metaLeg *Leg
+	if metadata != nil {
+		metaLeg = &metadata.Legs[0]
+	}
+
 	leg := Leg{
 		ID:           "long_put",
 		Symbol:       legState.Request.Symbol,
@@ -122,7 +144,13 @@ func (s *ProtectivePut) ConfirmEntry(ctx context.Context, result *execution.Mult
 		Side:         legState.Request.Side,
 		Qty:          legState.FilledQty,
 		EntryPrice:   legState.AvgFillPrice,
-		OptionType:   "put",
+	}
+
+	if metaLeg != nil {
+		leg.Strike = metaLeg.Strike
+		leg.OptionType = metaLeg.OptionType
+		leg.Delta = metaLeg.Delta
+		leg.Gamma = metaLeg.Gamma
 	}
 
 	totalPremium := legState.AvgFillPrice * float64(legState.FilledQty)

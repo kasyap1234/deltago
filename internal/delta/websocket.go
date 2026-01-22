@@ -12,17 +12,22 @@ import (
 
 // WebSocketClient handles real-time data from Delta Exchange
 type WebSocketClient struct {
-	url           string
-	auth          *Auth
-	conn          *websocket.Conn
-	done          chan struct{}
-	reconnect     bool
-	mu            sync.Mutex
-	handlers      map[string][]func(json.RawMessage)
-	isConnected   bool
-	pingTicker    *time.Ticker
-	subscriptions []subscriptionInfo // Track subscriptions for reconnect
-	closeOnce     sync.Once          // Prevent double-close panic
+	url            string
+	auth           *Auth
+	conn           *websocket.Conn
+	done           chan struct{}
+	reconnect      bool
+	mu             sync.Mutex
+	handlers       map[string][]func(json.RawMessage)
+	isConnected    bool
+	pingTicker     *time.Ticker
+	subscriptions  []subscriptionInfo // Track subscriptions for reconnect
+	closeOnce      sync.Once          // Prevent double-close panic
+	
+	reconnectMu    sync.Mutex
+	reconnectDelay time.Duration
+	maxReconnect   time.Duration
+	reconnecting   bool
 }
 
 type subscriptionInfo struct {
@@ -46,11 +51,13 @@ type PositionUpdate struct {
 // NewWebSocketClient creates a new WebSocket client
 func NewWebSocketClient(wsURL string, auth *Auth) *WebSocketClient {
 	return &WebSocketClient{
-		url:       wsURL,
-		auth:      auth,
-		done:      make(chan struct{}),
-		reconnect: true,
-		handlers:  make(map[string][]func(json.RawMessage)),
+		url:            wsURL,
+		auth:           auth,
+		done:           make(chan struct{}),
+		reconnect:      true,
+		handlers:       make(map[string][]func(json.RawMessage)),
+		reconnectDelay: 1 * time.Second,
+		maxReconnect:   60 * time.Second,
 	}
 }
 
@@ -105,6 +112,51 @@ func (w *WebSocketClient) connectInternal(isReconnect bool) error {
 	}
 
 	return nil
+}
+
+// scheduleReconnect handles reconnection with backoff
+func (w *WebSocketClient) scheduleReconnect() {
+	w.reconnectMu.Lock()
+	if w.reconnecting || !w.reconnect {
+		w.reconnectMu.Unlock()
+		return
+	}
+	w.reconnecting = true
+	w.reconnectMu.Unlock()
+
+	go func() {
+		defer func() {
+			w.reconnectMu.Lock()
+			w.reconnecting = false
+			w.reconnectMu.Unlock()
+		}()
+
+		delay := w.reconnectDelay
+		for {
+			select {
+			case <-w.done:
+				return
+			case <-time.After(delay):
+			}
+
+			log.Printf("Attempting reconnection (delay: %v)...", delay)
+
+			if err := w.connectInternal(true); err != nil {
+				log.Printf("Reconnection failed: %v", err)
+
+				// Exponential backoff
+				delay = delay * 2
+				if delay > w.maxReconnect {
+					delay = w.maxReconnect
+				}
+				continue
+			}
+
+			log.Println("Reconnected successfully")
+			w.reconnectDelay = 1 * time.Second // Reset delay
+			return
+		}
+	}()
 }
 
 // Subscribe subscribes to a channel
@@ -215,11 +267,8 @@ func (w *WebSocketClient) readMessages() {
 		w.mu.Unlock()
 
 		if w.reconnect {
-			log.Println("WebSocket disconnected, attempting reconnect...")
-			time.Sleep(5 * time.Second)
-			if err := w.connectInternal(true); err != nil { // Use connectInternal with reconnect=true
-				log.Printf("Reconnection failed: %v", err)
-			}
+			log.Println("WebSocket disconnected, scheduling reconnect...")
+			w.scheduleReconnect()
 		}
 	}()
 

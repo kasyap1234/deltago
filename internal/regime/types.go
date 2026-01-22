@@ -25,14 +25,24 @@ const (
 	StressCrash  StressState = "CRASH"
 )
 
+type EventRisk string
+
+const (
+	EventRiskNone      EventRisk = "NONE"
+	EventRiskExpiry    EventRisk = "EXPIRY"     // Expiry day
+	EventRiskAnnounce  EventRisk = "ANNOUNCE"   // Major announcement expected
+	EventRiskRollover  EventRisk = "ROLLOVER"   // Contract rollover
+)
+
 // Regime represents the current market regime
 type Regime struct {
-	Trend    TrendState
-	Vol      VolState
-	Stress   StressState
-	Score    float64            // confidence 0-1
-	Features map[string]float64 // debug/telemetry
-	AsOf     time.Time
+	Trend     TrendState
+	Vol       VolState
+	Stress    StressState
+	EventRisk EventRisk
+	Score     float64            // confidence 0-1
+	Features  map[string]float64 // debug/telemetry
+	AsOf      time.Time
 }
 
 // FeatureSet contains computed market features

@@ -85,11 +85,35 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 
 	callPrice := parseFloat(atmCall.Quotes.BestAsk)
 	putPrice := parseFloat(atmPut.Quotes.BestAsk)
+	totalDebit := (callPrice + putPrice) * float64(s.PositionSize)
 
-	// REMOVED: Position assignment moved to ConfirmEntry()
-	// Position will only be set AFTER fills are verified
+	// Prepare metadata
+	legs := []Leg{
+		{
+			ID: "long_call", InstrumentID: atmCall.ProductID, Symbol: atmCall.Symbol,
+			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: callPrice,
+			Strike: atmStrike, OptionType: "call",
+			Delta: parseFloat(atmCall.Greeks.Delta), Gamma: parseFloat(atmCall.Greeks.Gamma),
+		},
+		{
+			ID: "long_put", InstrumentID: atmPut.ProductID, Symbol: atmPut.Symbol,
+			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: putPrice,
+			Strike: atmStrike, OptionType: "put",
+			Delta: parseFloat(atmPut.Greeks.Delta), Gamma: parseFloat(atmPut.Greeks.Gamma),
+		},
+	}
+
+	metadata := &StrategyPositionMetadata{
+		NetPremium:    -totalDebit,
+		MaxLoss:       totalDebit,
+		MaxProfit:     999999,
+		BreakevenLow:  atmStrike - (totalDebit / float64(s.PositionSize)),
+		BreakevenHigh: atmStrike + (totalDebit / float64(s.PositionSize)),
+		Legs:          legs,
+	}
 
 	return &execution.MultiLegOrder{
+		Metadata:   metadata,
 		StrategyID: strategyID,
 		Timeout:    60 * time.Second,
 		AllOrNone:  true,
@@ -125,18 +149,26 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 }
 
 // ConfirmEntry sets the position state AFTER fills are verified
-func (s *LongStraddle) ConfirmEntry(ctx context.Context, result *execution.MultiLegResult) error {
+func (s *LongStraddle) ConfirmEntry(ctx context.Context, result *execution.MultiLegResult, metadata *StrategyPositionMetadata) error {
 	if !result.FullyFilled {
 		return fmt.Errorf("cannot confirm entry - not fully filled")
 	}
 
 	// Extract actual fill data
 	legs := make([]Leg, 0, 2)
-	totalDebit := 0.0
-
 	for legID, legState := range result.LegResults {
 		if legState.Status != execution.StatusFilled {
 			return fmt.Errorf("leg %s not filled: %s", legID, legState.Status)
+		}
+
+		var metaLeg *Leg
+		if metadata != nil {
+			for i := range metadata.Legs {
+				if metadata.Legs[i].ID == legID {
+					metaLeg = &metadata.Legs[i]
+					break
+				}
+			}
 		}
 
 		leg := Leg{
@@ -148,32 +180,42 @@ func (s *LongStraddle) ConfirmEntry(ctx context.Context, result *execution.Multi
 			EntryPrice:   legState.AvgFillPrice,
 		}
 
-		if legID == "long_call" {
-			leg.OptionType = "call"
-		} else if legID == "long_put" {
-			leg.OptionType = "put"
+		if metaLeg != nil {
+			leg.Strike = metaLeg.Strike
+			leg.OptionType = metaLeg.OptionType
+			leg.Delta = metaLeg.Delta
+			leg.Gamma = metaLeg.Gamma
 		}
 
-		totalDebit += legState.AvgFillPrice * float64(legState.FilledQty)
 		legs = append(legs, leg)
 	}
 
-	// Calculate breakevens from actual fills
-	var atmStrike float64
-	if len(legs) > 0 {
-		atmStrike = legs[0].Strike
+	// Calculate actual metrics from fills
+	var netPremium, maxLoss, maxProfit, breakevenLow, breakevenHigh float64
+	if metadata != nil {
+		actualNet := 0.0
+		for _, leg := range legs {
+			actualNet -= leg.EntryPrice * float64(leg.Qty)
+		}
+		netPremium = actualNet
+		maxLoss = -actualNet
+		maxProfit = metadata.MaxProfit
+		
+		atmStrike := legs[0].Strike
+		premiumPerContract := -actualNet / float64(s.PositionSize)
+		breakevenLow = atmStrike - premiumPerContract
+		breakevenHigh = atmStrike + premiumPerContract
 	}
-	premiumPerContract := totalDebit / float64(s.PositionSize)
 
 	// NOW set the position with actual fill data
 	s.position = &StrategyPosition{
 		StrategyID:    result.StrategyID,
 		EntryTime:     result.CompletedAt,
-		NetPremium:    -totalDebit,
-		MaxLoss:       totalDebit,
-		MaxProfit:     999999, // Unlimited upside
-		BreakevenLow:  atmStrike - premiumPerContract,
-		BreakevenHigh: atmStrike + premiumPerContract,
+		NetPremium:    netPremium,
+		MaxLoss:       maxLoss,
+		MaxProfit:     maxProfit,
+		BreakevenLow:  breakevenLow,
+		BreakevenHigh: breakevenHigh,
 		Legs:          legs,
 	}
 

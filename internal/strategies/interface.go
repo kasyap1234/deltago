@@ -47,7 +47,7 @@ type Strategy interface {
 
 	// CRITICAL: ConfirmEntry is called AFTER fills are verified
 	// This ensures position state is only set when we actually have the position
-	ConfirmEntry(ctx context.Context, result *execution.MultiLegResult) error
+	ConfirmEntry(ctx context.Context, result *execution.MultiLegResult, metadata *StrategyPositionMetadata) error
 
 	// Ongoing management (stop loss, take profit, rolling)
 	Manage(ctx context.Context, in Input) ([]execution.OrderRequest, error)
@@ -76,6 +76,16 @@ type StrategyPosition struct {
 	CurrentPnL    float64
 	BreakevenLow  float64
 	BreakevenHigh float64
+}
+
+// StrategyPositionMetadata contains metadata about a proposed position
+type StrategyPositionMetadata struct {
+	NetPremium    float64
+	MaxLoss       float64
+	MaxProfit     float64
+	BreakevenLow  float64
+	BreakevenHigh float64
+	Legs          []Leg
 }
 
 // Leg represents one leg of an options position

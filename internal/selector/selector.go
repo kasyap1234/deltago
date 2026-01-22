@@ -2,6 +2,10 @@ package selector
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
 
 	"github.com/kiwhtas/deltago/internal/portfolio"
 	"github.com/kiwhtas/deltago/internal/regime"
@@ -14,6 +18,13 @@ type StrategyIntent struct {
 	Strategy     strategies.Strategy
 	Weight       float64 // fraction of risk budget
 	Reason       string
+}
+
+// StrategyScore holds the score for a strategy
+type StrategyScore struct {
+	Strategy strategies.Strategy
+	Score    float64
+	Reasons  []string
 }
 
 // StrategyPlan is the output of strategy selection
@@ -30,6 +41,7 @@ type Selector interface {
 
 // RuleBasedSelector implements regime-to-strategy mapping
 type RuleBasedSelector struct {
+	mu         sync.RWMutex
 	strategies map[string]strategies.Strategy
 	
 	// Configuration
@@ -53,6 +65,9 @@ func NewRuleBasedSelector(strats []strategies.Strategy) *RuleBasedSelector {
 
 // BuildPlan selects strategies for the current regime
 func (s *RuleBasedSelector) BuildPlan(ctx context.Context, r *regime.Regime, pf *portfolio.State) (*StrategyPlan, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	plan := &StrategyPlan{
 		Regime:  r,
 		Intents: make([]StrategyIntent, 0),
@@ -63,115 +78,102 @@ func (s *RuleBasedSelector) BuildPlan(ctx context.Context, r *regime.Regime, pf 
 		return plan, nil
 	}
 	
-	// Priority 1: Crash protection
-	if r.Stress == regime.StressCrash {
-		if strat, ok := s.strategies["protective_put"]; ok {
-			plan.Intents = append(plan.Intents, StrategyIntent{
-				StrategyID: "protective_put",
-				Strategy:   strat,
-				Weight:     0.5,
-				Reason:     "crash detected",
-			})
+	// Score all strategies
+	var scores []StrategyScore
+	for _, strat := range s.strategies {
+		score := s.scoreStrategy(strat, r, pf)
+		if score.Score > 0.3 { // Minimum threshold
+			scores = append(scores, score)
 		}
-		// Also consider bear put spread
-		if strat, ok := s.strategies["bear_put_spread"]; ok {
-			plan.Intents = append(plan.Intents, StrategyIntent{
-				StrategyID: "bear_put_spread",
-				Strategy:   strat,
-				Weight:     0.3,
-				Reason:     "crash protection",
-			})
-		}
-		plan.TotalWeight = 0.8
-		return plan, nil
 	}
 	
-	// Priority 2: Trend following
-	switch r.Trend {
-	case regime.TrendUp:
-		if strat, ok := s.strategies["bull_call_spread"]; ok {
-			plan.Intents = append(plan.Intents, StrategyIntent{
-				StrategyID: "bull_call_spread",
-				Strategy:   strat,
-				Weight:     0.4,
-				Reason:     "uptrend confirmed",
-			})
+	// Sort by score descending
+	sort.Slice(scores, func(i, j int) bool {
+		return scores[i].Score > scores[j].Score
+	})
+	
+	// Take top N strategies
+	for i := 0; i < len(scores); i++ {
+		if i >= s.MaxStrategiesActive {
+			break
 		}
 		
-	case regime.TrendDown:
-		if strat, ok := s.strategies["bear_put_spread"]; ok {
-			plan.Intents = append(plan.Intents, StrategyIntent{
-				StrategyID: "bear_put_spread",
-				Strategy:   strat,
-				Weight:     0.4,
-				Reason:     "downtrend confirmed",
-			})
-		}
-		// Add protective puts in strong downtrends
-		if r.Vol == regime.VolHigh {
-			if strat, ok := s.strategies["protective_put"]; ok {
-				plan.Intents = append(plan.Intents, StrategyIntent{
-					StrategyID: "protective_put",
-					Strategy:   strat,
-					Weight:     0.2,
-					Reason:     "high vol downtrend protection",
-				})
-			}
-		}
-		
-	case regime.TrendSideways:
-		// Volatility determines strategy
-		switch r.Vol {
-		case regime.VolHigh:
-			// Sell premium when IV is high
-			if strat, ok := s.strategies["iron_condor"]; ok {
-				plan.Intents = append(plan.Intents, StrategyIntent{
-					StrategyID: "iron_condor",
-					Strategy:   strat,
-					Weight:     0.4,
-					Reason:     "sideways + high IV - sell premium",
-				})
-			}
-			
-		case regime.VolLow:
-			// Buy premium when IV is low (expecting expansion)
-			if strat, ok := s.strategies["long_straddle"]; ok {
-				plan.Intents = append(plan.Intents, StrategyIntent{
-					StrategyID: "long_straddle",
-					Strategy:   strat,
-					Weight:     0.3,
-					Reason:     "sideways + low IV - vol expansion bet",
-				})
-			}
-			
-		default:
-			// Normal vol sideways - iron condor with smaller size
-			if strat, ok := s.strategies["iron_condor"]; ok {
-				plan.Intents = append(plan.Intents, StrategyIntent{
-					StrategyID: "iron_condor",
-					Strategy:   strat,
-					Weight:     0.3,
-					Reason:     "sideways market",
-				})
-			}
-		}
-	}
-	
-	// Calculate total weight
-	for _, intent := range plan.Intents {
-		plan.TotalWeight += intent.Weight
-	}
-	
-	// Limit number of strategies
-	if len(plan.Intents) > s.MaxStrategiesActive {
-		plan.Intents = plan.Intents[:s.MaxStrategiesActive]
+		plan.Intents = append(plan.Intents, StrategyIntent{
+			StrategyID: scores[i].Strategy.ID(),
+			Strategy:   scores[i].Strategy,
+			Weight:     scores[i].Score,
+			Reason:     strings.Join(scores[i].Reasons, "; "),
+		})
+		plan.TotalWeight += scores[i].Score
 	}
 	
 	return plan, nil
 }
 
+func (s *RuleBasedSelector) scoreStrategy(strat strategies.Strategy, r *regime.Regime, pf *portfolio.State) StrategyScore {
+	score := StrategyScore{
+		Strategy: strat,
+		Score:    0,
+		Reasons:  make([]string, 0),
+	}
+	
+	// Base score from regime match
+	suitableRegimes := strat.SuitableRegimes()
+	for _, sr := range suitableRegimes {
+		if sr == r.Trend {
+			score.Score += 0.3
+			score.Reasons = append(score.Reasons, fmt.Sprintf("matches trend %s", r.Trend))
+		}
+	}
+	
+	// Vol preference match
+	prefVol := strat.PreferredVol()
+	if prefVol == r.Vol || prefVol == regime.VolNormal {
+		score.Score += 0.2
+		score.Reasons = append(score.Reasons, fmt.Sprintf("vol preference matches"))
+	}
+	
+	// Regime confidence boost
+	score.Score *= r.Score
+	
+	// Penalize if we already have many positions
+	positionCount := len(pf.GetPositionsByStrategy(strat.ID()))
+	if positionCount > 0 {
+		score.Score *= 0.5 // Reduce score for strategies with existing positions
+		score.Reasons = append(score.Reasons, fmt.Sprintf("existing positions: %d", positionCount))
+	}
+	
+	// Penalize near event risk
+	if r.EventRisk != regime.EventRiskNone {
+		if strat.ID() == "long_straddle" {
+			// Long straddle is actually good before events
+			score.Score *= 1.2
+			score.Reasons = append(score.Reasons, "event risk - vol expansion opportunity")
+		} else if strat.ID() == "iron_condor" {
+			// Dangerous to sell premium near events
+			score.Score *= 0.3
+			score.Reasons = append(score.Reasons, "event risk - avoid short premium")
+		}
+	}
+	
+	// Special handling for crash
+	if r.Stress == regime.StressCrash {
+		if strat.ID() == "protective_put" || strat.ID() == "bear_put_spread" {
+			score.Score *= 2.0
+			score.Reasons = append(score.Reasons, "CRASH PROTECTION")
+		} else {
+			score.Score *= 0.1 // Avoid other strategies
+		}
+	}
+	
+	return score
+}
+
 // GetActiveStrategies returns strategies that currently have positions
 func (s *RuleBasedSelector) GetActiveStrategies() []strategies.Strategy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	var active []strategies.Strategy
 	for _, strat := range s.strategies {
 		if strat.HasPosition() {
@@ -183,6 +185,9 @@ func (s *RuleBasedSelector) GetActiveStrategies() []strategies.Strategy {
 
 // GetAllStrategies returns all registered strategies
 func (s *RuleBasedSelector) GetAllStrategies() []strategies.Strategy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	var all []strategies.Strategy
 	for _, strat := range s.strategies {
 		all = append(all, strat)

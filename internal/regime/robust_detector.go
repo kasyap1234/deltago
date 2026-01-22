@@ -26,6 +26,10 @@ type RobustDetector struct {
 	
 	// Regime history for persistence check
 	regimeHistory []RegimeSnapshot
+	
+	// Smoothing
+	trendConfidence []float64
+	eventDetector   *EventDetector
 }
 
 type RobustConfig struct {
@@ -90,11 +94,13 @@ type RegimeSnapshot struct {
 
 func NewRobustDetector(cfg RobustConfig) *RobustDetector {
 	return &RobustDetector{
-		config:        cfg,
-		shortTF:       newTimeframeData("5m", 100),
-		mediumTF:      newTimeframeData("1h", 50),
-		longTF:        newTimeframeData("4h", 30),
-		regimeHistory: make([]RegimeSnapshot, 0, cfg.HistorySize),
+		config:          cfg,
+		shortTF:         newTimeframeData("5m", 100),
+		mediumTF:        newTimeframeData("1h", 50),
+		longTF:          newTimeframeData("4h", 30),
+		regimeHistory:   make([]RegimeSnapshot, 0, cfg.HistorySize),
+		trendConfidence: make([]float64, 0, 20),
+		eventDetector:   NewEventDetector(),
 	}
 }
 
@@ -206,19 +212,30 @@ func (d *RobustDetector) Detect() *Regime {
 	}
 
 	// 6. Calculate confidence based on agreement
-	confidence := float64(maxVotes) / float64(totalTFs)
+	rawConfidence := float64(maxVotes) / float64(totalTFs)
 	
 	// Boost confidence if all timeframes agree
 	if maxVotes == totalTFs {
-		confidence = 0.9
+		rawConfidence = 0.9
 	}
+	
+	// Smooth confidence
+	d.trendConfidence = append(d.trendConfidence, rawConfidence)
+	if len(d.trendConfidence) > 10 {
+		d.trendConfidence = d.trendConfidence[1:]
+	}
+	smoothedConf := d.smoothedConfidence(rawConfidence, d.trendConfidence)
+
+	// Detect event risk
+	eventRisk := d.eventDetector.DetectEventRisk(time.Now())
 
 	// 7. Check regime persistence
-	proposedRegime := d.createRegime(consensusTrend, consensusVol, StressNormal, confidence,
+	proposedRegime := d.createRegime(consensusTrend, consensusVol, StressNormal, smoothedConf,
 		map[string]float64{
 			"trend_votes": float64(maxVotes),
 			"total_tfs":   float64(totalTFs),
 		})
+	proposedRegime.EventRisk = eventRisk
 
 	// 8. Apply hysteresis - don't switch if recent switch or persistence not met
 	if d.currentRegime != nil {
@@ -226,6 +243,8 @@ func (d *RobustDetector) Detect() *Regime {
 		if time.Since(d.lastSwitchTime) < d.config.SwitchCooldown {
 			if proposedRegime.Trend != d.currentRegime.Trend {
 				// Still in cooldown, keep current regime
+				// But update EventRisk as that is real-time
+				d.currentRegime.EventRisk = eventRisk
 				return d.currentRegime
 			}
 		}
@@ -237,6 +256,7 @@ func (d *RobustDetector) Detect() *Regime {
 			// Check persistence requirement
 			if !d.checkRegimePersistence(proposedRegime) {
 				// Proposed regime hasn't persisted long enough
+				d.currentRegime.EventRisk = eventRisk
 				return d.currentRegime
 			}
 		}
@@ -255,6 +275,21 @@ func (d *RobustDetector) Detect() *Regime {
 	d.addToHistory(proposedRegime)
 	
 	return proposedRegime
+}
+
+func (d *RobustDetector) smoothedConfidence(current float64, history []float64) float64 {
+	sum := current
+	weight := 1.0
+	totalWeight := 1.0
+	
+	// Exponential moving average over history
+	for i := len(history) - 1; i >= 0; i-- {
+		weight *= 0.8 // Decay factor
+		sum += history[i] * weight
+		totalWeight += weight
+	}
+	
+	return sum / totalWeight
 }
 
 func (d *RobustDetector) detectTimeframe(tf *TimeframeData) *Regime {
@@ -568,18 +603,37 @@ func calculateRealizedVol(prices []float64, period int) float64 {
 }
 
 func calculateIVRank(prices, highs, lows []float64, atrPeriod, historyPeriod int) float64 {
-	if len(prices) < historyPeriod {
+	minRequired := atrPeriod + historyPeriod
+	if len(prices) < minRequired {
+		return 0.5 // Default when insufficient data
+	}
+
+	// Calculate current ATR
+	n := len(prices)
+	currentATR := calculateATR(prices, highs, lows, atrPeriod)
+	if currentATR == 0 {
 		return 0.5
 	}
 
-	currentATR := calculateATR(prices, highs, lows, atrPeriod)
-
-	// Calculate ATRs over history
+	// Calculate historical ATRs
 	var atrHistory []float64
-	for i := atrPeriod + 1; i < len(prices); i++ {
-		endIdx := i
-		startIdx := maxInt(0, endIdx-atrPeriod)
-		histATR := calculateATR(prices[startIdx:endIdx], highs[startIdx:endIdx], lows[startIdx:endIdx], atrPeriod)
+
+	// Start from atrPeriod+1, calculate ATR at each historical point
+	// We want to compare current ATR against the distribution of ATRs over the lookback window
+	startAnalysisIdx := n - historyPeriod
+	if startAnalysisIdx < atrPeriod+1 {
+		startAnalysisIdx = atrPeriod + 1
+	}
+
+	for endIdx := startAnalysisIdx; endIdx < n; endIdx++ {
+		// Get the ATR as of that point in time
+		// We pass the full history up to endIdx so calculateATR has enough data
+		histATR := calculateATR(
+			prices[:endIdx],
+			highs[:endIdx],
+			lows[:endIdx],
+			atrPeriod,
+		)
 		if histATR > 0 {
 			atrHistory = append(atrHistory, histATR)
 		}
