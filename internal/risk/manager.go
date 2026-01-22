@@ -73,7 +73,7 @@ func (m *Manager) Start() error {
 		m.wsClient.OnPositionUpdate(func(update delta.PositionUpdate) {
 			log.Printf("Position update: %s action=%s size=%d", update.Symbol, update.Action, update.Size)
 			// Trigger stop loss check on position updates
-			go m.checkAllStopLosses()
+			go m.CheckAllStopLosses()
 		})
 	}
 
@@ -106,13 +106,13 @@ func (m *Manager) monitorLoop() {
 		case <-m.stopChan:
 			return
 		case <-ticker.C:
-			m.checkAllStopLosses()
-			m.checkDailyLoss()
+			m.CheckAllStopLosses()
+			m.CheckDailyLoss()
 		}
 	}
 }
 
-func (m *Manager) checkAllStopLosses() {
+func (m *Manager) CheckAllStopLosses() {
 	// Use trylock pattern to prevent concurrent stop-loss checks
 	// This avoids double-closing positions from WS updates + polling
 	if !m.checkMu.TryLock() {
@@ -150,7 +150,7 @@ func (m *Manager) checkAllStopLosses() {
 	}
 }
 
-func (m *Manager) checkDailyLoss() {
+func (m *Manager) CheckDailyLoss() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
