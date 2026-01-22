@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -277,7 +278,7 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 			// This is more efficient and maintains maker status if req.PostOnly is true
 			if state != nil && !state.IsTerminal() && state.ExchangeOrderID != 0 {
 				newPrice := fmt.Sprintf("%.2f", req.Price)
-				fmt.Printf("DEBUG: Walking price for order %d to %s (attempt %d)\n", state.ExchangeOrderID, newPrice, attempt)
+				log.Printf("DEBUG [Execution]: Walking price for order %d to %s (attempt %d)", state.ExchangeOrderID, newPrice, attempt)
 				updatedOrder, err := m.client.EditOrder(state.ExchangeOrderID, req.InstrumentID, newPrice, req.Qty)
 				if err == nil {
 					state.UpdatedAt = time.Now()
@@ -285,7 +286,7 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 					state.FilledQty = updatedOrder.Size - updatedOrder.UnfilledSize
 					// After edit, we still need to wait for it to fill
 				} else {
-					fmt.Printf("DEBUG: EditOrder failed for %d: %v\n", state.ExchangeOrderID, err)
+					log.Printf("DEBUG [Execution]: EditOrder failed for %d: %v", state.ExchangeOrderID, err)
 					// If edit failed, cancel and we'll re-place in next PlaceAndWait
 					_ = m.client.CancelOrder(state.ExchangeOrderID, req.InstrumentID)
 					state.Status = StatusCancelled
@@ -303,7 +304,7 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 		var err error
 		state, err = m.PlaceAndWait(ctx, req, timeout/time.Duration(cfg.MaxRetries+1))
 		if err != nil {
-			fmt.Printf("DEBUG: Order attempt %d failed: %v (Price: %.4f)\n", attempt, err, req.Price)
+			log.Printf("DEBUG [Execution]: Order attempt %d failed: %v (Price: %.2f)", attempt, err, req.Price)
 			// If error was post_only rejection, we just continue to next attempt (higher/lower price)
 			continue
 		}
