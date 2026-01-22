@@ -82,29 +82,46 @@ func (r *Regime) IsCrash() bool {
 }
 
 // SuggestedStrategies returns strategy types suited for this regime
+// Key principle: Sell premium when vol is HIGH (expensive), Buy premium when vol is LOW (cheap)
 func (r *Regime) SuggestedStrategies() []string {
 	if r.Stress == StressCrash {
-		return []string{"protective_put", "put_spread"}
+		return []string{"protective_put", "bear_put_spread"}
 	}
 
 	switch r.Trend {
 	case TrendUp:
 		if r.Vol == VolHigh {
+			// High vol uptrend: SELL premium (credit spreads) - premium is expensive
+			return []string{"put_credit_spread", "bull_call_spread"}
+		}
+		if r.Vol == VolLow {
+			// Low vol uptrend: BUY premium (debit spreads) - options are cheap
 			return []string{"bull_call_spread"}
 		}
+		// Normal vol: balanced approach
 		return []string{"bull_call_spread", "put_credit_spread"}
 	case TrendDown:
 		if r.Vol == VolHigh {
+			// High vol downtrend: SELL premium (credit spreads) - premium is expensive
+			// But also protective puts for crash protection
+			return []string{"call_credit_spread", "protective_put", "bear_put_spread"}
+		}
+		if r.Vol == VolLow {
+			// Low vol downtrend: BUY premium (debit spreads) - options are cheap
 			return []string{"bear_put_spread"}
 		}
+		// Normal vol: balanced approach
 		return []string{"bear_put_spread", "call_credit_spread"}
 	case TrendSideways:
 		if r.Vol == VolHigh {
+			// High vol sideways: SELL premium (iron condor) - best environment for premium selling
 			return []string{"iron_condor", "iron_butterfly"}
 		}
 		if r.Vol == VolLow {
-			return []string{"long_straddle", "long_strangle"} // vol expansion bet
+			// Low vol sideways: BUY premium (straddle) - bet on vol expansion
+			return []string{"long_straddle", "long_strangle"}
 		}
+		// Normal vol sideways: still iron condor but smaller size
 		return []string{"iron_condor"}
 	}
 	return []string{"iron_condor"} // default

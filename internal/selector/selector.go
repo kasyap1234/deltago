@@ -126,12 +126,17 @@ func (s *RuleBasedSelector) scoreStrategy(strat strategies.Strategy, r *regime.R
 		}
 	}
 	
-	// Vol preference match
+	// Vol preference match - only exact matches get full bonus, VolNormal is a weak match
 	prefVol := strat.PreferredVol()
-	if prefVol == r.Vol || prefVol == regime.VolNormal {
-		score.Score += 0.2
-		score.Reasons = append(score.Reasons, fmt.Sprintf("vol preference matches"))
+	if prefVol == r.Vol {
+		score.Score += 0.25
+		score.Reasons = append(score.Reasons, "exact vol preference match")
+	} else if prefVol == regime.VolNormal {
+		// VolNormal preference = strategy works in any vol, give small bonus
+		score.Score += 0.1
+		score.Reasons = append(score.Reasons, "vol-neutral strategy")
 	}
+	// No bonus if vol preference doesn't match (mismatch is penalty by omission)
 	
 	// Regime confidence boost
 	score.Score *= r.Score
@@ -143,30 +148,45 @@ func (s *RuleBasedSelector) scoreStrategy(strat strategies.Strategy, r *regime.R
 		score.Reasons = append(score.Reasons, fmt.Sprintf("existing positions: %d", positionCount))
 	}
 	
-	// Penalize near event risk
+	// Penalize near event risk - affects ALL short premium strategies
 	if r.EventRisk != regime.EventRiskNone {
-		if strat.ID() == "long_straddle" {
-			// Long straddle is actually good before events
-			score.Score *= 1.2
+		stratID := strat.ID()
+		// Long premium strategies benefit from events
+		if stratID == "long_straddle" || stratID == "protective_put" {
+			score.Score *= 1.3
 			score.Reasons = append(score.Reasons, "event risk - vol expansion opportunity")
-		} else if strat.ID() == "iron_condor" {
-			// Dangerous to sell premium near events
-			score.Score *= 0.3
+		} else if isShortPremiumStrategy(stratID) {
+			// ALL short premium strategies are dangerous near events
+			score.Score *= 0.2
 			score.Reasons = append(score.Reasons, "event risk - avoid short premium")
 		}
 	}
 	
-	// Special handling for crash
+	// Special handling for crash - be more aggressive about protection
 	if r.Stress == regime.StressCrash {
 		if strat.ID() == "protective_put" || strat.ID() == "bear_put_spread" {
-			score.Score *= 2.0
-			score.Reasons = append(score.Reasons, "CRASH PROTECTION")
+			score.Score = 1.0 // Force high score for protective strategies
+			score.Reasons = append(score.Reasons, "CRASH PROTECTION ACTIVATED")
 		} else {
-			score.Score *= 0.1 // Avoid other strategies
+			score.Score *= 0.05 // Almost zero other strategies
+			score.Reasons = append(score.Reasons, "crash - avoiding non-protective strategy")
 		}
 	}
 	
 	return score
+}
+
+// isShortPremiumStrategy returns true if the strategy sells premium (short gamma/vega)
+func isShortPremiumStrategy(stratID string) bool {
+	shortPremiumStrategies := map[string]bool{
+		"iron_condor":       true,
+		"iron_butterfly":    true,
+		"put_credit_spread": true,
+		"call_credit_spread": true,
+		"short_strangle":    true,
+		"short_straddle":    true,
+	}
+	return shortPremiumStrategies[stratID]
 }
 
 // GetActiveStrategies returns strategies that currently have positions

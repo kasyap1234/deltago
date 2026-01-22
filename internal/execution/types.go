@@ -45,6 +45,7 @@ type OrderRequest struct {
 	TimeInForce   string // gtc, ioc, fok
 	StrategyID    string // for tracking
 	LegID         string // for multi-leg strategies
+	Priority      int    // execution priority (1=highest, close shorts before longs)
 }
 
 // OrderAck is the acknowledgment after placing

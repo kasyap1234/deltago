@@ -175,7 +175,7 @@ func (d *RobustDetector) Detect() *Regime {
 			map[string]float64{"crash_detected": 1})
 	}
 
-	// 3. Consensus on trend
+	// 3. Consensus on trend - use deterministic ordering to avoid map iteration randomness
 	trendVotes := make(map[TrendState]int)
 	trendVotes[shortRegime.Trend]++
 	trendVotes[mediumRegime.Trend]++
@@ -183,9 +183,13 @@ func (d *RobustDetector) Detect() *Regime {
 		trendVotes[longRegime.Trend]++
 	}
 
+	// Use deterministic order: prefer Sideways in ties (most conservative)
+	// Order: Sideways > Up > Down (in case of equal votes)
+	trendOrder := []TrendState{TrendSideways, TrendUp, TrendDown}
 	consensusTrend := TrendSideways
 	maxVotes := 0
-	for trend, votes := range trendVotes {
+	for _, trend := range trendOrder {
+		votes := trendVotes[trend]
 		if votes > maxVotes {
 			maxVotes = votes
 			consensusTrend = trend
@@ -356,7 +360,7 @@ func (d *RobustDetector) detectTimeframe(tf *TimeframeData) *Regime {
 	trendSignals := 0
 	totalSignals := 0
 
-	// Signal 1: ADX + EMA slope
+	// Signal 1: ADX + EMA slope (directional strength)
 	if adx > d.config.TrendADXThreshold {
 		totalSignals++
 		if emaSlope > d.config.TrendSlopeThreshold {
@@ -366,7 +370,7 @@ func (d *RobustDetector) detectTimeframe(tf *TimeframeData) *Regime {
 		}
 	}
 
-	// Signal 2: Price position relative to EMAs
+	// Signal 2: Price position relative to EMAs (trend alignment)
 	totalSignals++
 	if prices[n-1] > emaFast && emaFast > emaSlow {
 		trendSignals++ // uptrend
@@ -374,7 +378,7 @@ func (d *RobustDetector) detectTimeframe(tf *TimeframeData) *Regime {
 		trendSignals-- // downtrend
 	}
 
-	// Signal 3: Higher highs / lower lows
+	// Signal 3: Higher highs / lower lows (price structure)
 	if n >= 10 {
 		totalSignals++
 		hh := highs[n-1] > highs[n-5] && highs[n-5] > highs[n-10]
@@ -394,6 +398,50 @@ func (d *RobustDetector) detectTimeframe(tf *TimeframeData) *Regime {
 			trendSignals++
 		} else if roc < -0.02 { // 2% down
 			trendSignals--
+		}
+	}
+
+	// Signal 5: Efficiency Ratio (trend quality) - new!
+	// ER = |Price Change| / Sum of |Daily Changes|
+	// High ER (>0.5) = strong trend, Low ER (<0.2) = choppy
+	if n >= 20 {
+		priceChange := math.Abs(prices[n-1] - prices[n-20])
+		sumChanges := 0.0
+		for i := n - 19; i < n; i++ {
+			sumChanges += math.Abs(prices[i] - prices[i-1])
+		}
+		if sumChanges > 0 {
+			efficiencyRatio := priceChange / sumChanges
+			regime.Features["efficiency_ratio"] = efficiencyRatio
+			
+			totalSignals++
+			if efficiencyRatio > 0.5 {
+				// Strong directional move - add to trend direction
+				if prices[n-1] > prices[n-20] {
+					trendSignals++
+				} else {
+					trendSignals--
+				}
+			}
+			// Low ER = choppy, no signal (implicit sideways)
+		}
+	}
+
+	// Signal 6: Choppiness Index (inverse trend indicator) - new!
+	// CI = 100 * log10(ATR_sum / (HighestHigh - LowestLow)) / log10(n)
+	// High CI (>60) = choppy/sideways, Low CI (<40) = trending
+	if n >= 14 {
+		ci := calculateChoppinessIndex(prices, highs, lows, 14)
+		regime.Features["choppiness_index"] = ci
+		
+		// If CI is very high, penalize trend signals (market is choppy)
+		if ci > 60 {
+			// Choppy market - halve the trend signals
+			if trendSignals > 0 {
+				trendSignals = trendSignals / 2
+			} else if trendSignals < 0 {
+				trendSignals = trendSignals / 2
+			}
 		}
 	}
 
@@ -432,18 +480,26 @@ func (d *RobustDetector) checkRegimePersistence(proposed *Regime) bool {
 		return true // Not enough history, allow switch
 	}
 
-	// Count how many recent snapshots match proposed regime
-	matches := 0
+	// Count how many recent snapshots match proposed regime (both trend AND vol)
+	trendMatches := 0
+	volMatches := 0
 	checkCount := minInt(5, len(d.regimeHistory))
 	
 	for i := len(d.regimeHistory) - checkCount; i < len(d.regimeHistory); i++ {
 		if d.regimeHistory[i].Regime.Trend == proposed.Trend {
-			matches++
+			trendMatches++
+		}
+		if d.regimeHistory[i].Regime.Vol == proposed.Vol {
+			volMatches++
 		}
 	}
 
-	// Require majority of recent snapshots to agree
-	return matches >= (checkCount+1)/2
+	// Require majority of recent snapshots to agree on BOTH trend and vol
+	// This prevents rapid flipping between VolHigh/VolLow and strategy churn
+	trendPersists := trendMatches >= (checkCount+1)/2
+	volPersists := volMatches >= (checkCount+1)/2
+	
+	return trendPersists && volPersists
 }
 
 func (d *RobustDetector) addToHistory(r *Regime) {
@@ -578,13 +634,17 @@ func calculateRealizedVol(prices []float64, period int) float64 {
 
 	returns := make([]float64, 0, period)
 	for i := start; i < n; i++ {
-		if prices[i-1] > 0 {
-			returns = append(returns, math.Log(prices[i]/prices[i-1]))
+		if prices[i-1] > 0 && prices[i] > 0 {
+			logRet := math.Log(prices[i] / prices[i-1])
+			// Guard against NaN/Inf
+			if !math.IsNaN(logRet) && !math.IsInf(logRet, 0) {
+				returns = append(returns, logRet)
+			}
 		}
 	}
 
-	if len(returns) == 0 {
-		return 0.02
+	if len(returns) < 5 {
+		return 0.02 // Not enough valid returns
 	}
 
 	mean := 0.0
@@ -599,7 +659,15 @@ func calculateRealizedVol(prices []float64, period int) float64 {
 	}
 	variance /= float64(len(returns))
 
-	return math.Sqrt(variance) * math.Sqrt(252) // Annualized
+	// Annualize using 365 days for crypto (24/7 market)
+	vol := math.Sqrt(variance) * math.Sqrt(365)
+	
+	// Guard against unreasonable values
+	if math.IsNaN(vol) || math.IsInf(vol, 0) || vol > 10 {
+		return 0.02
+	}
+	
+	return vol
 }
 
 func calculateIVRank(prices, highs, lows []float64, atrPeriod, historyPeriod int) float64 {
@@ -672,4 +740,125 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// calculateChoppinessIndex measures how "choppy" vs "trending" the market is
+// Returns value 0-100: High (>61.8) = choppy/ranging, Low (<38.2) = trending
+func calculateChoppinessIndex(prices, highs, lows []float64, period int) float64 {
+	n := len(prices)
+	if n < period+1 {
+		return 50 // Neutral default
+	}
+
+	// Calculate sum of True Range over period
+	atrSum := 0.0
+	for i := n - period; i < n; i++ {
+		if i < 1 {
+			continue
+		}
+		tr := math.Max(highs[i]-lows[i],
+			math.Max(math.Abs(highs[i]-prices[i-1]),
+				math.Abs(lows[i]-prices[i-1])))
+		atrSum += tr
+	}
+
+	// Find highest high and lowest low over period
+	highestHigh := highs[n-period]
+	lowestLow := lows[n-period]
+	for i := n - period; i < n; i++ {
+		if highs[i] > highestHigh {
+			highestHigh = highs[i]
+		}
+		if lows[i] < lowestLow {
+			lowestLow = lows[i]
+		}
+	}
+
+	priceRange := highestHigh - lowestLow
+	if priceRange <= 0 || atrSum <= 0 {
+		return 50 // Neutral
+	}
+
+	// Choppiness Index formula
+	ci := 100 * math.Log10(atrSum/priceRange) / math.Log10(float64(period))
+
+	// Clamp to 0-100
+	if ci < 0 {
+		ci = 0
+	} else if ci > 100 {
+		ci = 100
+	}
+
+	return ci
+}
+
+// calculateBollingerBandWidth returns the Bollinger Band Width percentile
+// Used to detect volatility compression (potential breakout) vs expansion
+func calculateBollingerBandWidth(prices []float64, period int) (width float64, percentile float64) {
+	n := len(prices)
+	if n < period {
+		return 0.02, 0.5
+	}
+
+	// Calculate current BB width
+	start := n - period
+	mean := 0.0
+	for i := start; i < n; i++ {
+		mean += prices[i]
+	}
+	mean /= float64(period)
+
+	variance := 0.0
+	for i := start; i < n; i++ {
+		variance += (prices[i] - mean) * (prices[i] - mean)
+	}
+	variance /= float64(period)
+	stdDev := math.Sqrt(variance)
+
+	if mean <= 0 {
+		return 0.02, 0.5
+	}
+
+	currentWidth := (2 * 2 * stdDev) / mean // 2 std dev bands, normalized
+
+	// Calculate historical widths for percentile
+	if n < period*2 {
+		return currentWidth, 0.5
+	}
+
+	var widths []float64
+	for endIdx := period; endIdx <= n; endIdx++ {
+		startIdx := endIdx - period
+		m := 0.0
+		for i := startIdx; i < endIdx; i++ {
+			m += prices[i]
+		}
+		m /= float64(period)
+
+		v := 0.0
+		for i := startIdx; i < endIdx; i++ {
+			v += (prices[i] - m) * (prices[i] - m)
+		}
+		v /= float64(period)
+		sd := math.Sqrt(v)
+
+		if m > 0 {
+			w := (2 * 2 * sd) / m
+			widths = append(widths, w)
+		}
+	}
+
+	if len(widths) == 0 {
+		return currentWidth, 0.5
+	}
+
+	// Percentile rank
+	lower := 0
+	for _, w := range widths {
+		if w < currentWidth {
+			lower++
+		}
+	}
+
+	return currentWidth, float64(lower) / float64(len(widths))
 }

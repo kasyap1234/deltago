@@ -180,11 +180,14 @@ func (d *Detector) classifyRegime(fs *FeatureSet) *Regime {
 	r.Features["drawdown"] = fs.DrawdownPct
 	r.Features["iv_rank"] = fs.IVRank
 
-	// 1. Crash detection (highest priority)
+	// 1. Crash detection (highest priority) - short-circuit and return immediately
 	if fs.RecentReturn < -d.CrashThreshold ||
 		(fs.DrawdownPct > 0.08 && fs.VolSpike > d.VolSpikeThresh) {
 		r.Stress = StressCrash
-		r.Score = 0.9
+		r.Trend = TrendDown  // Force trend down during crash
+		r.Vol = VolHigh      // Force vol high during crash
+		r.Score = 0.95       // High confidence in crash detection
+		return r             // CRITICAL: Return immediately, don't let later code override
 	}
 
 	// 2. Trend classification
@@ -376,13 +379,21 @@ func (d *Detector) computeRealizedVol() float64 {
 	}
 
 	n := len(d.priceHistory)
-	returns := make([]float64, d.VolPeriod)
+	returns := make([]float64, 0, d.VolPeriod)
 
 	for i := 0; i < d.VolPeriod; i++ {
 		idx := n - d.VolPeriod + i
-		if idx > 0 {
-			returns[i] = math.Log(d.priceHistory[idx] / d.priceHistory[idx-1])
+		if idx > 0 && d.priceHistory[idx-1] > 0 && d.priceHistory[idx] > 0 {
+			logRet := math.Log(d.priceHistory[idx] / d.priceHistory[idx-1])
+			// Guard against NaN/Inf
+			if !math.IsNaN(logRet) && !math.IsInf(logRet, 0) {
+				returns = append(returns, logRet)
+			}
 		}
+	}
+
+	if len(returns) < 5 {
+		return 0.02 // Not enough valid returns
 	}
 
 	// Standard deviation
@@ -398,7 +409,15 @@ func (d *Detector) computeRealizedVol() float64 {
 	}
 	variance /= float64(len(returns))
 
-	return math.Sqrt(variance) * math.Sqrt(252) // Annualized
+	// Annualize using 365 days for crypto (24/7 market)
+	vol := math.Sqrt(variance) * math.Sqrt(365)
+	
+	// Guard against unreasonable values
+	if math.IsNaN(vol) || math.IsInf(vol, 0) || vol > 10 {
+		return 0.02
+	}
+	
+	return vol
 }
 
 func (d *Detector) computeATR() float64 {

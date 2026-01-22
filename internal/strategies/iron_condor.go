@@ -444,10 +444,12 @@ func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest
 	var orders []execution.OrderRequest
 	now := time.Now()
 
-	// Close in reverse order: sell legs first, then buy legs
-	// This prevents leaving naked shorts
+	// CRITICAL: Close short legs FIRST, then long legs
+	// This ensures we never remove protection before closing shorts
+	// The execution layer should respect this ordering
 
-	// First close shorts (buy to close)
+	// First: close shorts (buy to close) - PRIORITY
+	shortOrders := make([]execution.OrderRequest, 0, 2)
 	for _, leg := range s.position.Legs {
 		if leg.Side != execution.Sell {
 			continue
@@ -456,12 +458,13 @@ func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest
 		var price float64
 		for _, opt := range in.Snapshot.Options {
 			if opt.ProductID == leg.InstrumentID {
-				price = parseFloat(opt.Quotes.BestAsk) * 1.01 // slight slippage buffer
+				// Use more aggressive pricing for shorts - we MUST close these
+				price = parseFloat(opt.Quotes.BestAsk) * 1.02 // 2% buffer for urgency
 				break
 			}
 		}
 
-		orders = append(orders, execution.OrderRequest{
+		shortOrders = append(shortOrders, execution.OrderRequest{
 			ClientOrderID: execution.GenerateClientOrderID(s.position.StrategyID, leg.ID+"_close", now),
 			InstrumentID:  leg.InstrumentID,
 			Symbol:        leg.Symbol,
@@ -473,10 +476,12 @@ func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest
 			TimeInForce:   "ioc",
 			StrategyID:    s.position.StrategyID,
 			LegID:         leg.ID + "_close",
+			Priority:      1, // Higher priority - close first
 		})
 	}
 
-	// Then close longs (sell to close)
+	// Second: close longs (sell to close) - only after shorts are closed
+	longOrders := make([]execution.OrderRequest, 0, 2)
 	for _, leg := range s.position.Legs {
 		if leg.Side != execution.Buy {
 			continue
@@ -490,7 +495,7 @@ func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest
 			}
 		}
 
-		orders = append(orders, execution.OrderRequest{
+		longOrders = append(longOrders, execution.OrderRequest{
 			ClientOrderID: execution.GenerateClientOrderID(s.position.StrategyID, leg.ID+"_close", now),
 			InstrumentID:  leg.InstrumentID,
 			Symbol:        leg.Symbol,
@@ -502,8 +507,13 @@ func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest
 			TimeInForce:   "ioc",
 			StrategyID:    s.position.StrategyID,
 			LegID:         leg.ID + "_close",
+			Priority:      2, // Lower priority - close after shorts
 		})
 	}
+
+	// Return shorts first, then longs
+	orders = append(orders, shortOrders...)
+	orders = append(orders, longOrders...)
 
 	return orders, nil
 }

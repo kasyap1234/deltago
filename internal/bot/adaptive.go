@@ -412,9 +412,10 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 			continue
 		}
 
-		// Calculate expected greeks from the ORDER
+		// Calculate expected greeks and max loss from the ORDER
 		additionalDelta := 0.0
 		additionalGamma := 0.0
+		additionalMaxLoss := 0.0
 
 		if multiLeg.Metadata != nil {
 			if meta, ok := multiLeg.Metadata.(*strategies.StrategyPositionMetadata); ok {
@@ -426,13 +427,14 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 					additionalDelta += leg.Delta * qty
 					additionalGamma += leg.Gamma * qty
 				}
+				additionalMaxLoss = meta.MaxLoss
 			}
 		}
 
-		// Check risk limits with actual expected impact
-		if err := b.portfolio.CheckLimits(b.limits, additionalDelta, additionalGamma); err != nil {
-			log.Printf("Risk limit prevents entry for %s: %v (delta=%.2f gamma=%.4f)",
-				strat.Name(), err, additionalDelta, additionalGamma)
+		// Check risk limits with actual expected impact including max loss
+		if err := b.portfolio.CheckLimitsWithRisk(b.limits, additionalDelta, additionalGamma, additionalMaxLoss); err != nil {
+			log.Printf("Risk limit prevents entry for %s: %v (delta=%.2f gamma=%.4f maxLoss=%.2f)",
+				strat.Name(), err, additionalDelta, additionalGamma, additionalMaxLoss)
 			continue
 		}
 

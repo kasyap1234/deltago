@@ -275,19 +275,23 @@ type RiskLimits struct {
 	MaxPositionsPerStrategy int
 	MaxDailyLoss            float64
 	CooldownAfterLoss       time.Duration
+	MaxTotalRisk            float64 // max total portfolio risk (sum of max losses)
+	MaxStrategyRisk         float64 // max risk per strategy
 }
 
 // DefaultRiskLimits returns conservative defaults
 func DefaultRiskLimits() RiskLimits {
 	return RiskLimits{
-		MaxMarginPct:            0.5, // 50% max margin
-		MaxDeltaAbs:             5.0, // max 5 delta exposure
-		MaxShortGamma:           1.0, // limit short gamma
-		MaxVegaAbs:              100, // max vega exposure
+		MaxMarginPct:            0.5,  // 50% max margin
+		MaxDeltaAbs:             5.0,  // max 5 delta exposure
+		MaxShortGamma:           1.0,  // limit short gamma
+		MaxVegaAbs:              100,  // max vega exposure
 		MaxPositionsTotal:       20,
 		MaxPositionsPerStrategy: 4,
 		MaxDailyLoss:            1000,
 		CooldownAfterLoss:       30 * time.Minute,
+		MaxTotalRisk:            5000, // max $5000 total portfolio risk
+		MaxStrategyRisk:         1000, // max $1000 risk per strategy
 	}
 }
 
@@ -324,6 +328,44 @@ func (s *State) CheckLimits(limits RiskLimits, additionalDelta, additionalGamma 
 	}
 
 	return nil
+}
+
+// CheckLimitsWithRisk checks limits including max loss budget
+func (s *State) CheckLimitsWithRisk(limits RiskLimits, additionalDelta, additionalGamma, additionalMaxLoss float64) error {
+	// First check standard limits
+	if err := s.CheckLimits(limits, additionalDelta, additionalGamma); err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Check per-strategy risk limit
+	if additionalMaxLoss > limits.MaxStrategyRisk {
+		return &LimitError{Limit: "strategy_risk", Message: "strategy max loss exceeds limit"}
+	}
+
+	// Check total portfolio risk limit
+	currentTotalRisk := s.GetTotalRiskLocked()
+	if currentTotalRisk+additionalMaxLoss > limits.MaxTotalRisk {
+		return &LimitError{Limit: "total_risk", Message: "would exceed portfolio max risk"}
+	}
+
+	return nil
+}
+
+// GetTotalRiskLocked returns total risk - caller must hold lock
+func (s *State) GetTotalRiskLocked() float64 {
+	totalRisk := 0.0
+	// Sum up unrealized losses as a proxy for current risk
+	for _, p := range s.Positions {
+		if p.UnrealizedPnL < 0 {
+			totalRisk -= p.UnrealizedPnL
+		}
+	}
+	// Also add potential max loss from strategy entries
+	// (This would require tracking strategy metadata - simplified here)
+	return totalRisk
 }
 
 type LimitError struct {
