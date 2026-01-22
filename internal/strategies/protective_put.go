@@ -76,7 +76,7 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	now := time.Now()
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
-	putPrice := parseFloat(put.Quotes.BestAsk)
+	putPrice := parseFloat(put.Quotes.BestBid)
 	totalDebit := putPrice * float64(s.PositionSize)
 
 	// Prepare metadata

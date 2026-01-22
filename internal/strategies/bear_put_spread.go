@@ -94,8 +94,8 @@ func (s *BearPutSpread) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
 	// Calculate prices for orders
-	longPrice := parseFloat(longPut.Quotes.BestAsk)
-	shortPrice := parseFloat(shortPut.Quotes.BestBid)
+	longPrice := parseFloat(longPut.Quotes.BestBid)
+	shortPrice := parseFloat(shortPut.Quotes.BestAsk)
 	netDebit := longPrice - shortPrice
 
 	if netDebit <= 0 {

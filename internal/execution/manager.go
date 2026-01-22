@@ -12,6 +12,7 @@ import (
 // DeltaClient defines the interface for Delta Exchange operations needed by the manager
 type DeltaClient interface {
 	PlaceOrder(req delta.CreateOrderRequest) (*delta.Order, error)
+	EditOrder(orderID int64, productID int64, limitPrice string, size int) (*delta.Order, error)
 	CancelOrder(orderID int64, productID int64) error
 	GetActiveOrders(productID *int64) ([]delta.Order, error)
 	GetOrderHistory(orderID int64) (*delta.Order, error)
@@ -230,7 +231,7 @@ func (m *DeltaManager) PlaceAndWait(ctx context.Context, req OrderRequest, timeo
 // RetryConfig configures order retry behavior
 type RetryConfig struct {
 	MaxRetries    int
-	PriceStepPct  float64       // How much to walk price each retry
+	PriceStepPct  float64 // How much to walk price each retry
 	RetryInterval time.Duration
 	AllowCrossing bool // Allow crossing spread on final retry
 }
@@ -246,7 +247,7 @@ var DefaultRetryConfig = RetryConfig{
 // PlaceWithRetry places an order with retry logic and price walking
 func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, timeout time.Duration, cfg RetryConfig) (*OrderState, error) {
 	originalPrice := req.Price
-	
+	var state *OrderState
 	for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
 		if attempt > 0 {
 			// Wait before retry
@@ -255,7 +256,7 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 				return nil, ctx.Err()
 			case <-time.After(cfg.RetryInterval):
 			}
-			
+
 			// Walk the price
 			stepAmount := originalPrice * cfg.PriceStepPct * float64(attempt)
 			if req.Side == Buy {
@@ -263,31 +264,49 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 			} else {
 				req.Price = originalPrice - stepAmount // Offer lower
 			}
-			
-			// On final retry, allow crossing spread
-			if attempt == cfg.MaxRetries && cfg.AllowCrossing {
+
+			// If we have an active order, use EditOrder instead of PlaceAndWait
+			// This is more efficient and maintains maker status if req.PostOnly is true
+			if state != nil && !state.IsTerminal() && state.ExchangeOrderID != 0 {
+				newPrice := fmt.Sprintf("%.2f", req.Price)
+				updatedOrder, err := m.client.EditOrder(state.ExchangeOrderID, req.InstrumentID, newPrice, req.Qty)
+				if err == nil {
+					state.UpdatedAt = time.Now()
+					state.Status = mapOrderState(updatedOrder.State)
+					state.FilledQty = updatedOrder.Size - updatedOrder.UnfilledSize
+					// After edit, we still need to wait for it to fill
+				} else {
+					// If edit failed, cancel and we'll re-place in next PlaceAndWait
+					_ = m.client.CancelOrder(state.ExchangeOrderID, req.InstrumentID)
+					state.Status = StatusCancelled
+				}
+			}
+
+			// On final retry, allow crossing spread ONLY if not PostOnly
+			// If PostOnly is forced by user, we never cross.
+			if attempt == cfg.MaxRetries && cfg.AllowCrossing && !req.PostOnly {
 				req.PostOnly = false
 				req.TimeInForce = "ioc"
 			}
-			
-			// log.Printf("Retry %d/%d: adjusting price to %.4f", attempt, cfg.MaxRetries, req.Price)
 		}
-		
-		state, err := m.PlaceAndWait(ctx, req, timeout/time.Duration(cfg.MaxRetries+1))
+
+		var err error
+		state, err = m.PlaceAndWait(ctx, req, timeout/time.Duration(cfg.MaxRetries+1))
 		if err != nil {
-			continue // Try again
+			// If error was post_only rejection, we just continue to next attempt (higher/lower price)
+			continue
 		}
-		
+
 		if state.Status == StatusFilled {
 			return state, nil
 		}
-		
+
 		if state.Status == StatusPartial && state.FilledQty > 0 {
 			// Partial fill - update qty for next attempt
 			req.Qty = state.RemainingQty()
 		}
 	}
-	
+
 	return nil, fmt.Errorf("failed after %d retries", cfg.MaxRetries)
 }
 

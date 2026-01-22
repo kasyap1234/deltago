@@ -82,6 +82,35 @@ func (c *Client) CancelOrder(orderID int64, productID int64) error {
 	return nil
 }
 
+// EditOrder updates an existing order's price and/or size
+func (c *Client) EditOrder(orderID int64, productID int64, limitPrice string, size int) (*Order, error) {
+	body := map[string]interface{}{
+		"id":          orderID,
+		"product_id":  productID,
+		"limit_price": limitPrice,
+		"size":        size,
+	}
+
+	resp, err := c.doRequest("PUT", "/v2/orders", nil, body)
+	if err != nil {
+		return nil, err
+	}
+
+	var result APIResponse[Order]
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse edit order response: %w", err)
+	}
+
+	if !result.Success {
+		if result.Error != nil {
+			return nil, fmt.Errorf("edit order failed: %s (code: %d)", result.Error.Message, result.Error.Code)
+		}
+		return nil, fmt.Errorf("edit order failed: unknown error")
+	}
+
+	return &result.Result, nil
+}
+
 // CancelAllOrders cancels all open orders, optionally filtered by product
 func (c *Client) CancelAllOrders(productID *int64) error {
 	body := map[string]interface{}{}

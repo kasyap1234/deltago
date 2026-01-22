@@ -83,8 +83,8 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 	now := time.Now()
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
-	callPrice := parseFloat(atmCall.Quotes.BestAsk)
-	putPrice := parseFloat(atmPut.Quotes.BestAsk)
+	callPrice := parseFloat(atmCall.Quotes.BestBid)
+	putPrice := parseFloat(atmPut.Quotes.BestBid)
 	totalDebit := (callPrice + putPrice) * float64(s.PositionSize)
 
 	// Prepare metadata

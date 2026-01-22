@@ -25,6 +25,10 @@ func (m *MockClient) PlaceOrder(req delta.CreateOrderRequest) (*delta.Order, err
 	return &delta.Order{ID: 123, ClientOrderID: req.ClientOrderID, State: "open"}, nil
 }
 
+func (m *MockClient) EditOrder(orderID int64, productID int64, limitPrice string, size int) (*delta.Order, error) {
+	return &delta.Order{ID: orderID, ClientOrderID: "edited", State: "open"}, nil
+}
+
 func (m *MockClient) GetActiveOrders(productID *int64) ([]delta.Order, error) {
 	return []delta.Order{}, nil // Simulate order disappearing from active list
 }
@@ -59,41 +63,41 @@ func (m *MockClient) PlaceWithRetry(ctx context.Context, req OrderRequest, timeo
 func TestPlaceAndWait_FillVerification(t *testing.T) {
 	mock := &MockClient{
 		OrderHistory: &delta.Order{
-			ID: 123,
-			State: "filled",
-			Size: 10,
+			ID:           123,
+			State:        "filled",
+			Size:         10,
 			UnfilledSize: 0,
-			LimitPrice: "100.0",
+			LimitPrice:   "100.0",
 		},
 		Fills: []delta.Fill{
 			{
-				OrderID: 123,
+				OrderID:   123,
 				ProductID: 1,
-				Size: 10,
-				Price: "100.0",
-				Side: "buy",
+				Size:      10,
+				Price:     "100.0",
+				Side:      "buy",
 			},
 		},
 	}
-	
+
 	mgr := NewDeltaManager(mock)
 	req := OrderRequest{
 		InstrumentID: 1,
-		Qty: 10,
-		Price: 100.0,
-		Side: Buy,
+		Qty:          10,
+		Price:        100.0,
+		Side:         Buy,
 	}
-	
+
 	state, err := mgr.PlaceAndWait(context.Background(), req, 1*time.Second)
-	
+
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
-	
+
 	if state.Status != StatusFilled {
 		t.Errorf("Expected StatusFilled, got %s", state.Status)
 	}
-	
+
 	if state.FilledQty != 10 {
 		t.Errorf("Expected FilledQty 10, got %d", state.FilledQty)
 	}
@@ -102,31 +106,31 @@ func TestPlaceAndWait_FillVerification(t *testing.T) {
 func TestPlaceAndWait_CancelledDetection(t *testing.T) {
 	mock := &MockClient{
 		OrderHistory: &delta.Order{
-			ID: 123,
-			State: "cancelled",
-			Size: 10,
+			ID:           123,
+			State:        "cancelled",
+			Size:         10,
 			UnfilledSize: 10,
 		},
 	}
-	
+
 	mgr := NewDeltaManager(mock)
 	req := OrderRequest{
 		InstrumentID: 1,
-		Qty: 10,
-		Price: 100.0,
-		Side: Buy,
+		Qty:          10,
+		Price:        100.0,
+		Side:         Buy,
 	}
-	
+
 	state, err := mgr.PlaceAndWait(context.Background(), req, 1*time.Second)
-	
+
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
-	
+
 	if state.Status != StatusCancelled {
 		t.Errorf("Expected StatusCancelled, got %s", state.Status)
 	}
-	
+
 	if state.FilledQty != 0 {
 		t.Errorf("Expected FilledQty 0, got %d", state.FilledQty)
 	}

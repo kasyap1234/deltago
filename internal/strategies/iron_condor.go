@@ -124,10 +124,10 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
 	// Calculate prices
-	shortCallPrice := parseFloat(shortCall.Quotes.BestBid)
-	shortPutPrice := parseFloat(shortPut.Quotes.BestBid)
-	longCallPrice := parseFloat(longCall.Quotes.BestAsk)
-	longPutPrice := parseFloat(longPut.Quotes.BestAsk)
+	shortCallPrice := parseFloat(shortCall.Quotes.BestAsk)
+	shortPutPrice := parseFloat(shortPut.Quotes.BestAsk)
+	longCallPrice := parseFloat(longCall.Quotes.BestBid)
+	longPutPrice := parseFloat(longPut.Quotes.BestBid)
 
 	// Net credit = premium received - premium paid
 	netCredit := (shortCallPrice + shortPutPrice - longCallPrice - longPutPrice) * float64(s.PositionSize)

@@ -98,8 +98,8 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 	now := time.Now()
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
-	longPrice := parseFloat(longCall.Quotes.BestAsk)
-	shortPrice := parseFloat(shortCall.Quotes.BestBid)
+	longPrice := parseFloat(longCall.Quotes.BestBid)
+	shortPrice := parseFloat(shortCall.Quotes.BestAsk)
 	netDebit := longPrice - shortPrice
 
 	// Check if debit is positive
@@ -338,7 +338,7 @@ func (s *BullCallSpread) buildCloseOrderRequests(in Input) ([]execution.OrderReq
 		for _, opt := range in.Snapshot.Options {
 			if opt.ProductID == leg.InstrumentID {
 				if closeSide == execution.Buy {
-					price = parseFloat(opt.Quotes.BestAsk)
+					price = parseFloat(opt.Quotes.BestAsk) // Use aggressive price for exits
 				} else {
 					price = parseFloat(opt.Quotes.BestBid)
 				}
