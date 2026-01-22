@@ -269,6 +269,7 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 			// This is more efficient and maintains maker status if req.PostOnly is true
 			if state != nil && !state.IsTerminal() && state.ExchangeOrderID != 0 {
 				newPrice := fmt.Sprintf("%.2f", req.Price)
+				fmt.Printf("DEBUG: Walking price for order %d to %s (attempt %d)\n", state.ExchangeOrderID, newPrice, attempt)
 				updatedOrder, err := m.client.EditOrder(state.ExchangeOrderID, req.InstrumentID, newPrice, req.Qty)
 				if err == nil {
 					state.UpdatedAt = time.Now()
@@ -276,6 +277,7 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 					state.FilledQty = updatedOrder.Size - updatedOrder.UnfilledSize
 					// After edit, we still need to wait for it to fill
 				} else {
+					fmt.Printf("DEBUG: EditOrder failed for %d: %v\n", state.ExchangeOrderID, err)
 					// If edit failed, cancel and we'll re-place in next PlaceAndWait
 					_ = m.client.CancelOrder(state.ExchangeOrderID, req.InstrumentID)
 					state.Status = StatusCancelled
