@@ -238,6 +238,23 @@ func ExecuteMultiLeg(ctx context.Context, mgr Manager, order MultiLegOrder) (*Mu
 	return result, nil
 }
 
+// ExecutionMode defines whether to prioritize Maker or Taker fills
+type ExecutionMode string
+
+const (
+	ModeMaker ExecutionMode = "maker"
+	ModeTaker ExecutionMode = "taker"
+)
+
+// RetryConfig configures order retry behavior
+type RetryConfig struct {
+	MaxRetries    int
+	PriceStepPct  float64 // How much to walk price each retry
+	RetryInterval time.Duration
+	AllowCrossing bool          // Allow crossing spread on final retry
+	Mode          ExecutionMode // maker or taker
+}
+
 // GenerateClientOrderID creates a deterministic order ID
 func GenerateClientOrderID(strategyID, legID string, timestamp time.Time) string {
 	return fmt.Sprintf("%s_%s", strategyID, legID)

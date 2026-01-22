@@ -229,20 +229,13 @@ func (m *DeltaManager) PlaceAndWait(ctx context.Context, req OrderRequest, timeo
 	return state, state.Error
 }
 
-// RetryConfig configures order retry behavior
-type RetryConfig struct {
-	MaxRetries    int
-	PriceStepPct  float64 // How much to walk price each retry
-	RetryInterval time.Duration
-	AllowCrossing bool // Allow crossing spread on final retry
-}
-
 // DefaultRetryConfig provides sensible defaults for low-liquidity options
 var DefaultRetryConfig = RetryConfig{
 	MaxRetries:    5,
-	PriceStepPct:  0.05, // 5% per retry - very aggressive for testnet options
+	PriceStepPct:  0.05, // 5% per retry
 	RetryInterval: 2 * time.Second,
-	AllowCrossing: true, // Allow taker on final retry for guaranteed fill
+	AllowCrossing: true,      // Allow taker on final retry
+	Mode:          ModeTaker, // Default to Taker for Testnet reliability
 }
 
 // PlaceWithRetry places an order with retry logic and price walking
@@ -256,7 +249,7 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 			if baseClientOrderID != "" {
 				req.ClientOrderID = fmt.Sprintf("%s_r%d", baseClientOrderID, attempt)
 				if len(req.ClientOrderID) > 32 {
-					// Fallback to just the suffix if too long, though shouldn't happen with our current naming
+					// Fallback to just the suffix if too long
 					req.ClientOrderID = req.ClientOrderID[len(req.ClientOrderID)-32:]
 				}
 			}
@@ -311,10 +304,17 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 			}
 		}
 
+		// If mode is Taker, force Market order on first attempt
+		if cfg.Mode == ModeTaker {
+			req.OrderType = Market
+			req.TimeInForce = "gtc" // Market orders usually GTC/IOC
+			req.PostOnly = false
+		}
+
 		var err error
 		state, err = m.PlaceAndWait(ctx, req, timeout/time.Duration(cfg.MaxRetries+1))
 		if err != nil {
-			log.Printf("DEBUG [Execution]: Order attempt %d failed: %v (Price: %.2f)", attempt, err, req.Price)
+			log.Printf("DEBUG [Execution]: Order attempt %d failed: %v (Price: %.2f, ID: %s)", attempt, err, req.Price, req.ClientOrderID)
 			// If error was post_only rejection, we just continue to next attempt (higher/lower price)
 			continue
 		}
