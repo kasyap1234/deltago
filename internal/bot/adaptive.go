@@ -238,15 +238,21 @@ func (b *AdaptiveBot) runCycle(ctx context.Context) {
 }
 
 func (b *AdaptiveBot) updateRegime(ctx context.Context) error {
-	// Fetch recent candles for each timeframe
-	candles, err := b.fetchRecentCandles(ctx)
+	// Fetch recent candles for all timeframes
+	shortCandles, mediumCandles, longCandles, err := b.fetchAllTimeframeCandles(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Update short timeframe
-	for _, c := range candles {
+	// Update all timeframes
+	for _, c := range shortCandles {
 		b.detector.UpdateShortTF(c)
+	}
+	for _, c := range mediumCandles {
+		b.detector.UpdateMediumTF(c)
+	}
+	for _, c := range longCandles {
+		b.detector.UpdateLongTF(c)
 	}
 
 	// Detect regime using robust multi-timeframe detection
@@ -297,24 +303,46 @@ func (b *AdaptiveBot) fetchMarketSnapshot(ctx context.Context) (*strategies.Mark
 	}, nil
 }
 
-func (b *AdaptiveBot) fetchRecentCandles(ctx context.Context) ([]regime.OHLCV, error) {
+// fetchAllTimeframeCandles fetches candles for all three timeframes: 5m, 1h, 4h
+func (b *AdaptiveBot) fetchAllTimeframeCandles(ctx context.Context) (short, medium, long []regime.OHLCV, err error) {
 	perpSymbol := b.underlying + "USD"
 	now := time.Now()
 
-	// Fetch 5-minute candles for the last 8 hours (96 candles)
-	// This provides enough data for short-term indicators
-	startTime := now.Add(-8 * time.Hour)
-
-	candles, err := b.client.GetOHLCV(perpSymbol, "5m", startTime, now)
+	// Fetch 5-minute candles for the last 8 hours (~96 candles)
+	shortStart := now.Add(-8 * time.Hour)
+	shortRaw, err := b.client.GetOHLCV(perpSymbol, "5m", shortStart, now)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch OHLCV candles: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to fetch 5m candles: %w", err)
+	}
+	short = b.convertCandles(shortRaw)
+
+	// Fetch 1-hour candles for the last 50 hours (~50 candles)
+	mediumStart := now.Add(-50 * time.Hour)
+	mediumRaw, err := b.client.GetOHLCV(perpSymbol, "1h", mediumStart, now)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to fetch 1h candles: %w", err)
+	}
+	medium = b.convertCandles(mediumRaw)
+
+	// Fetch 4-hour candles for the last 5 days (~30 candles)
+	longStart := now.Add(-5 * 24 * time.Hour)
+	longRaw, err := b.client.GetOHLCV(perpSymbol, "4h", longStart, now)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to fetch 4h candles: %w", err)
+	}
+	long = b.convertCandles(longRaw)
+
+	if len(short) == 0 {
+		return nil, nil, nil, fmt.Errorf("no 5m candles returned for %s", perpSymbol)
 	}
 
-	if len(candles) == 0 {
-		return nil, fmt.Errorf("no candles returned for %s", perpSymbol)
-	}
+	log.Printf("📈 Fetched candles: 5m=%d, 1h=%d, 4h=%d", len(short), len(medium), len(long))
 
-	// Convert Delta candles to regime.OHLCV format
+	return short, medium, long, nil
+}
+
+// convertCandles converts Delta OHLCCandle to regime.OHLCV format
+func (b *AdaptiveBot) convertCandles(candles []delta.OHLCCandle) []regime.OHLCV {
 	ohlcvData := make([]regime.OHLCV, 0, len(candles))
 	for _, c := range candles {
 		ohlcvData = append(ohlcvData, regime.OHLCV{
@@ -326,8 +354,7 @@ func (b *AdaptiveBot) fetchRecentCandles(ctx context.Context) ([]regime.OHLCV, e
 			Volume:    c.Volume,
 		})
 	}
-
-	return ohlcvData, nil
+	return ohlcvData
 }
 
 func (b *AdaptiveBot) manageExistingPositions(ctx context.Context, input strategies.Input) {

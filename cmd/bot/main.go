@@ -46,11 +46,15 @@ func main() {
 		client = delta.NewProductionClient(cfg.API.APIKey, cfg.API.APISecret)
 	}
 
-	// Verify connectivity
-	if err := verifyConnectivity(client); err != nil {
-		log.Fatalf("Failed to connect to Delta Exchange : %v", err)
+	// Verify connectivity (skip in dry-run mode)
+	if !*dryRun {
+		if err := verifyConnectivity(client); err != nil {
+			log.Fatalf("Failed to connect to Delta Exchange : %v", err)
+		}
+		log.Println("✅ Connected to Delta Exchange")
+	} else {
+		log.Println("⏭️  Skipping connectivity verification in dry-run mode")
 	}
-	log.Println("✅ Connected to Delta Exchange")
 
 	// Create risk manager
 	riskMgr := risk.NewManager(
