@@ -548,8 +548,26 @@ func (b *AdaptiveBot) reconcilePositions(ctx context.Context) {
 			Qty:           int64(pos.Size),
 			AvgPrice:      entryPrice,
 			UnrealizedPnL: unrealizedPnL,
-			UpdatedAt:     time.Now(),
 		})
+	}
+
+	// Health check logging
+	b.logHealth()
+}
+
+func (b *AdaptiveBot) logHealth() {
+	p := b.portfolio
+	g := p.GetGreeks()
+	positions := p.GetPositions()
+
+	log.Printf("📊 Health Check [Portfolio]: Positions=%d UPnL=%.2f Delta=%.4f Gamma=%.4f",
+		len(positions), p.TotalUnrealizedPnL(), g.NetDelta, g.NetGamma)
+
+	if len(positions) > 0 {
+		for _, pos := range positions {
+			log.Printf("   📍 Position: %s Qty=%d Price=%.2f UPnL=%.2f Strategy=%s",
+				pos.Symbol, pos.Qty, pos.AvgPrice, pos.UnrealizedPnL, pos.StrategyID)
+		}
 	}
 }
 

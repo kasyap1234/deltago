@@ -109,6 +109,19 @@ func (s *State) GetPosition(instrumentID int64) *Position {
 	return s.Positions[instrumentID]
 }
 
+// GetPositions returns all open positions
+func (s *State) GetPositions() map[int64]*Position {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Create copy
+	positions := make(map[int64]*Position)
+	for k, v := range s.Positions {
+		positions[k] = v
+	}
+	return positions
+}
+
 // GetPositionsByStrategy returns positions for a strategy
 func (s *State) GetPositionsByStrategy(strategyID string) []*Position {
 	s.mu.RLock()
@@ -282,10 +295,10 @@ type RiskLimits struct {
 // DefaultRiskLimits returns conservative defaults
 func DefaultRiskLimits() RiskLimits {
 	return RiskLimits{
-		MaxMarginPct:            0.5,  // 50% max margin
-		MaxDeltaAbs:             5.0,  // max 5 delta exposure
-		MaxShortGamma:           1.0,  // limit short gamma
-		MaxVegaAbs:              100,  // max vega exposure
+		MaxMarginPct:            0.5, // 50% max margin
+		MaxDeltaAbs:             5.0, // max 5 delta exposure
+		MaxShortGamma:           1.0, // limit short gamma
+		MaxVegaAbs:              100, // max vega exposure
 		MaxPositionsTotal:       20,
 		MaxPositionsPerStrategy: 4,
 		MaxDailyLoss:            1000,
