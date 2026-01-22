@@ -531,12 +531,14 @@ func (b *AdaptiveBot) reconcilePositions(ctx context.Context) {
 		return
 	}
 
+	seenIDs := make(map[int64]bool)
 	// Update portfolio state
 	for _, pos := range positions {
 		if pos.Size == 0 {
 			b.portfolio.RemovePosition(pos.ProductID)
 			continue
 		}
+		seenIDs[pos.ProductID] = true
 
 		var entryPrice, unrealizedPnL float64
 		fmt.Sscanf(pos.EntryPrice, "%f", &entryPrice)
@@ -549,6 +551,13 @@ func (b *AdaptiveBot) reconcilePositions(ctx context.Context) {
 			AvgPrice:      entryPrice,
 			UnrealizedPnL: unrealizedPnL,
 		})
+	}
+
+	// Remove positions that are no longer on the exchange (manually closed)
+	for id := range b.portfolio.GetPositions() {
+		if !seenIDs[id] {
+			b.portfolio.RemovePosition(id)
+		}
 	}
 
 	// Health check logging
