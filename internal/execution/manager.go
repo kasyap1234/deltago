@@ -239,7 +239,7 @@ type RetryConfig struct {
 // DefaultRetryConfig provides sensible defaults for low-liquidity options
 var DefaultRetryConfig = RetryConfig{
 	MaxRetries:    5,
-	PriceStepPct:  0.02, // 2% per retry - aggressive for options
+	PriceStepPct:  0.05, // 5% per retry - very aggressive for testnet options
 	RetryInterval: 2 * time.Second,
 	AllowCrossing: true, // Allow taker on final retry for guaranteed fill
 }

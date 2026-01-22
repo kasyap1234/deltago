@@ -173,7 +173,7 @@ func ExecuteMultiLeg(ctx context.Context, mgr Manager, order MultiLegOrder) (*Mu
 			if order.AllOrNone {
 				// Rollback: close all filled buy legs
 				for legID, legState := range result.LegResults {
-					if legState.Status == StatusFilled {
+					if legState != nil && legState.Status == StatusFilled {
 						closeReq := OrderRequest{
 							InstrumentID: legState.Request.InstrumentID,
 							Symbol:       legState.Request.Symbol,
@@ -210,7 +210,7 @@ func ExecuteMultiLeg(ctx context.Context, mgr Manager, order MultiLegOrder) (*Mu
 			if order.AllOrNone {
 				// Rollback all legs
 				for legID, legState := range result.LegResults {
-					if legState.Status == StatusFilled {
+					if legState != nil && legState.Status == StatusFilled {
 						closeSide := Buy
 						if legState.Request.Side == Buy {
 							closeSide = Sell
