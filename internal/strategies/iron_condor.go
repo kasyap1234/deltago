@@ -23,7 +23,7 @@ type IronCondor struct {
 func NewIronCondor(client *delta.Client, positionSize int, shortDelta float64, wingWidth int) *IronCondor {
 	return &IronCondor{
 		BaseStrategy: BaseStrategy{
-			id:                 "iron_condor",
+			id:                 "ic",
 			name:               "Iron Condor",
 			client:             client,
 			PositionSize:       positionSize,
@@ -145,34 +145,34 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 	// Prepare metadata for risk checks
 	longCallStrike := parseFloat(longCall.StrikePrice)
 	longPutStrike := parseFloat(longPut.StrikePrice)
-	
+
 	legs := []Leg{
 		{
-			ID: "short_call", InstrumentID: shortCall.ProductID, Symbol: shortCall.Symbol,
+			ID: "sc", InstrumentID: shortCall.ProductID, Symbol: shortCall.Symbol,
 			Side: execution.Sell, Qty: s.PositionSize, EntryPrice: shortCallPrice,
 			Strike: shortCallStrike,
-			Delta: parseFloat(shortCall.Greeks.Delta), Gamma: parseFloat(shortCall.Greeks.Gamma),
+			Delta:  parseFloat(shortCall.Greeks.Delta), Gamma: parseFloat(shortCall.Greeks.Gamma),
 		},
 		{
-			ID: "short_put", InstrumentID: shortPut.ProductID, Symbol: shortPut.Symbol,
+			ID: "sp", InstrumentID: shortPut.ProductID, Symbol: shortPut.Symbol,
 			Side: execution.Sell, Qty: s.PositionSize, EntryPrice: shortPutPrice,
 			Strike: shortPutStrike,
-			Delta: parseFloat(shortPut.Greeks.Delta), Gamma: parseFloat(shortPut.Greeks.Gamma),
+			Delta:  parseFloat(shortPut.Greeks.Delta), Gamma: parseFloat(shortPut.Greeks.Gamma),
 		},
 		{
-			ID: "long_call", InstrumentID: longCall.ProductID, Symbol: longCall.Symbol,
+			ID: "lc", InstrumentID: longCall.ProductID, Symbol: longCall.Symbol,
 			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: longCallPrice,
 			Strike: longCallStrike,
-			Delta: parseFloat(longCall.Greeks.Delta), Gamma: parseFloat(longCall.Greeks.Gamma),
+			Delta:  parseFloat(longCall.Greeks.Delta), Gamma: parseFloat(longCall.Greeks.Gamma),
 		},
 		{
-			ID: "long_put", InstrumentID: longPut.ProductID, Symbol: longPut.Symbol,
+			ID: "lp", InstrumentID: longPut.ProductID, Symbol: longPut.Symbol,
 			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: longPutPrice,
 			Strike: longPutStrike,
-			Delta: parseFloat(longPut.Greeks.Delta), Gamma: parseFloat(longPut.Greeks.Gamma),
+			Delta:  parseFloat(longPut.Greeks.Delta), Gamma: parseFloat(longPut.Greeks.Gamma),
 		},
 	}
-	
+
 	maxSpreadWidth := 0.0
 	if width := longCallStrike - shortCallStrike; width > maxSpreadWidth {
 		maxSpreadWidth = width
@@ -180,9 +180,9 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 	if width := shortPutStrike - longPutStrike; width > maxSpreadWidth {
 		maxSpreadWidth = width
 	}
-	
+
 	maxLoss := (maxSpreadWidth * float64(s.PositionSize)) - netCredit
-	
+
 	metadata := &StrategyPositionMetadata{
 		NetPremium:    netCredit,
 		MaxLoss:       maxLoss,
@@ -204,7 +204,7 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 		Legs: []execution.OrderRequest{
 			// Long call (protection) - BUY FIRST
 			{
-				ClientOrderID: execution.GenerateClientOrderID(strategyID, "long_call", now),
+				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lc", now),
 				InstrumentID:  longCall.ProductID,
 				Symbol:        longCall.Symbol,
 				Side:          execution.Buy,
@@ -214,11 +214,11 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 				PostOnly:      true,
 				TimeInForce:   "gtc",
 				StrategyID:    strategyID,
-				LegID:         "long_call",
+				LegID:         "lc",
 			},
 			// Long put (protection) - BUY FIRST
 			{
-				ClientOrderID: execution.GenerateClientOrderID(strategyID, "long_put", now),
+				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lp", now),
 				InstrumentID:  longPut.ProductID,
 				Symbol:        longPut.Symbol,
 				Side:          execution.Buy,
@@ -228,11 +228,11 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 				PostOnly:      true,
 				TimeInForce:   "gtc",
 				StrategyID:    strategyID,
-				LegID:         "long_put",
+				LegID:         "lp",
 			},
 			// Short call - SELL after protection in place
 			{
-				ClientOrderID: execution.GenerateClientOrderID(strategyID, "short_call", now),
+				ClientOrderID: execution.GenerateClientOrderID(strategyID, "sc", now),
 				InstrumentID:  shortCall.ProductID,
 				Symbol:        shortCall.Symbol,
 				Side:          execution.Sell,
@@ -242,11 +242,11 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 				PostOnly:      true,
 				TimeInForce:   "gtc",
 				StrategyID:    strategyID,
-				LegID:         "short_call",
+				LegID:         "sc",
 			},
 			// Short put - SELL after protection in place
 			{
-				ClientOrderID: execution.GenerateClientOrderID(strategyID, "short_put", now),
+				ClientOrderID: execution.GenerateClientOrderID(strategyID, "sp", now),
 				InstrumentID:  shortPut.ProductID,
 				Symbol:        shortPut.Symbol,
 				Side:          execution.Sell,
@@ -256,7 +256,7 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 				PostOnly:      true,
 				TimeInForce:   "gtc",
 				StrategyID:    strategyID,
-				LegID:         "short_put",
+				LegID:         "sp",
 			},
 		},
 	}, nil

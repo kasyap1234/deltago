@@ -22,7 +22,7 @@ type ProtectivePut struct {
 func NewProtectivePut(client *delta.Client, positionSize int) *ProtectivePut {
 	return &ProtectivePut{
 		BaseStrategy: BaseStrategy{
-			id:                 "protective_put",
+			id:                 "pp",
 			name:               "Protective Put",
 			client:             client,
 			PositionSize:       positionSize,
@@ -82,7 +82,7 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	// Prepare metadata
 	legs := []Leg{
 		{
-			ID: "long_put", InstrumentID: put.ProductID, Symbol: put.Symbol,
+			ID: "lp", InstrumentID: put.ProductID, Symbol: put.Symbol,
 			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: putPrice,
 			Strike: parseFloat(put.StrikePrice), OptionType: "put",
 			Delta: parseFloat(put.Greeks.Delta), Gamma: parseFloat(put.Greeks.Gamma),
@@ -104,7 +104,7 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 		AllOrNone:  true,
 		Legs: []execution.OrderRequest{
 			{
-				ClientOrderID: execution.GenerateClientOrderID(strategyID, "long_put", now),
+				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lp", now),
 				InstrumentID:  put.ProductID,
 				Symbol:        put.Symbol,
 				Side:          execution.Buy,
@@ -114,7 +114,7 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 				PostOnly:      true,
 				TimeInForce:   "gtc",
 				StrategyID:    strategyID,
-				LegID:         "long_put",
+				LegID:         "lp",
 			},
 		},
 	}, nil
@@ -127,9 +127,9 @@ func (s *ProtectivePut) ConfirmEntry(ctx context.Context, result *execution.Mult
 	}
 
 	// Extract actual fill data (single leg)
-	legState, ok := result.LegResults["long_put"]
+	legState, ok := result.LegResults["lp"]
 	if !ok || legState.Status != execution.StatusFilled {
-		return fmt.Errorf("long_put leg not filled")
+		return fmt.Errorf("lp leg not filled")
 	}
 
 	var metaLeg *Leg
@@ -138,7 +138,7 @@ func (s *ProtectivePut) ConfirmEntry(ctx context.Context, result *execution.Mult
 	}
 
 	leg := Leg{
-		ID:           "long_put",
+		ID:           "lp",
 		Symbol:       legState.Request.Symbol,
 		InstrumentID: legState.Request.InstrumentID,
 		Side:         legState.Request.Side,

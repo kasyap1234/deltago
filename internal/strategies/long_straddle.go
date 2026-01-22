@@ -20,7 +20,7 @@ type LongStraddle struct {
 func NewLongStraddle(client *delta.Client, positionSize int) *LongStraddle {
 	return &LongStraddle{
 		BaseStrategy: BaseStrategy{
-			id:                 "long_straddle",
+			id:                 "ls",
 			name:               "Long Straddle",
 			client:             client,
 			PositionSize:       positionSize,
@@ -90,13 +90,13 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 	// Prepare metadata
 	legs := []Leg{
 		{
-			ID: "long_call", InstrumentID: atmCall.ProductID, Symbol: atmCall.Symbol,
+			ID: "lc", InstrumentID: atmCall.ProductID, Symbol: atmCall.Symbol,
 			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: callPrice,
 			Strike: atmStrike, OptionType: "call",
 			Delta: parseFloat(atmCall.Greeks.Delta), Gamma: parseFloat(atmCall.Greeks.Gamma),
 		},
 		{
-			ID: "long_put", InstrumentID: atmPut.ProductID, Symbol: atmPut.Symbol,
+			ID: "lp", InstrumentID: atmPut.ProductID, Symbol: atmPut.Symbol,
 			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: putPrice,
 			Strike: atmStrike, OptionType: "put",
 			Delta: parseFloat(atmPut.Greeks.Delta), Gamma: parseFloat(atmPut.Greeks.Gamma),
@@ -119,7 +119,7 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 		AllOrNone:  true,
 		Legs: []execution.OrderRequest{
 			{
-				ClientOrderID: execution.GenerateClientOrderID(strategyID, "long_call", now),
+				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lc", now),
 				InstrumentID:  atmCall.ProductID,
 				Symbol:        atmCall.Symbol,
 				Side:          execution.Buy,
@@ -129,10 +129,10 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 				PostOnly:      true,
 				TimeInForce:   "gtc",
 				StrategyID:    strategyID,
-				LegID:         "long_call",
+				LegID:         "lc",
 			},
 			{
-				ClientOrderID: execution.GenerateClientOrderID(strategyID, "long_put", now),
+				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lp", now),
 				InstrumentID:  atmPut.ProductID,
 				Symbol:        atmPut.Symbol,
 				Side:          execution.Buy,
@@ -142,7 +142,7 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 				PostOnly:      true,
 				TimeInForce:   "gtc",
 				StrategyID:    strategyID,
-				LegID:         "long_put",
+				LegID:         "lp",
 			},
 		},
 	}, nil
@@ -200,7 +200,7 @@ func (s *LongStraddle) ConfirmEntry(ctx context.Context, result *execution.Multi
 		netPremium = actualNet
 		maxLoss = -actualNet
 		maxProfit = metadata.MaxProfit
-		
+
 		atmStrike := legs[0].Strike
 		premiumPerContract := -actualNet / float64(s.PositionSize)
 		breakevenLow = atmStrike - premiumPerContract

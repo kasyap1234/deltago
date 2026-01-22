@@ -23,7 +23,7 @@ type BearPutSpread struct {
 func NewBearPutSpread(client *delta.Client, positionSize int) *BearPutSpread {
 	return &BearPutSpread{
 		BaseStrategy: BaseStrategy{
-			id:                 "bear_put_spread",
+			id:                 "bps",
 			name:               "Bear Put Spread",
 			client:             client,
 			PositionSize:       positionSize,
@@ -104,20 +104,20 @@ func (s *BearPutSpread) BuildEntryOrders(ctx context.Context, in Input) (*execut
 
 	// Check transaction costs
 	costs := in.Portfolio.Costs.EstimateCost(netDebit, true, 2)
-	if (longStrike-shortStrike-netDebit) < costs*2 {
+	if (longStrike - shortStrike - netDebit) < costs*2 {
 		return nil, fmt.Errorf("insufficient edge after costs: edge=%.2f costs=%.2f", longStrike-shortStrike-netDebit, costs)
 	}
 
 	// Prepare metadata
 	legs := []Leg{
 		{
-			ID: "long_put", InstrumentID: longPut.ProductID, Symbol: longPut.Symbol,
+			ID: "lp", InstrumentID: longPut.ProductID, Symbol: longPut.Symbol,
 			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: longPrice,
 			Strike: longStrike, OptionType: "put",
 			Delta: parseFloat(longPut.Greeks.Delta), Gamma: parseFloat(longPut.Greeks.Gamma),
 		},
 		{
-			ID: "short_put", InstrumentID: shortPut.ProductID, Symbol: shortPut.Symbol,
+			ID: "sp", InstrumentID: shortPut.ProductID, Symbol: shortPut.Symbol,
 			Side: execution.Sell, Qty: s.PositionSize, EntryPrice: shortPrice,
 			Strike: shortStrike, OptionType: "put",
 			Delta: parseFloat(shortPut.Greeks.Delta), Gamma: parseFloat(shortPut.Greeks.Gamma),
@@ -138,7 +138,7 @@ func (s *BearPutSpread) BuildEntryOrders(ctx context.Context, in Input) (*execut
 		AllOrNone:  true,
 		Legs: []execution.OrderRequest{
 			{
-				ClientOrderID: execution.GenerateClientOrderID(strategyID, "long_put", now),
+				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lp", now),
 				InstrumentID:  longPut.ProductID,
 				Symbol:        longPut.Symbol,
 				Side:          execution.Buy,
@@ -148,10 +148,10 @@ func (s *BearPutSpread) BuildEntryOrders(ctx context.Context, in Input) (*execut
 				PostOnly:      true,
 				TimeInForce:   "gtc",
 				StrategyID:    strategyID,
-				LegID:         "long_put",
+				LegID:         "lp",
 			},
 			{
-				ClientOrderID: execution.GenerateClientOrderID(strategyID, "short_put", now),
+				ClientOrderID: execution.GenerateClientOrderID(strategyID, "sp", now),
 				InstrumentID:  shortPut.ProductID,
 				Symbol:        shortPut.Symbol,
 				Side:          execution.Sell,
@@ -161,7 +161,7 @@ func (s *BearPutSpread) BuildEntryOrders(ctx context.Context, in Input) (*execut
 				PostOnly:      true,
 				TimeInForce:   "gtc",
 				StrategyID:    strategyID,
-				LegID:         "short_put",
+				LegID:         "sp",
 			},
 		},
 	}, nil

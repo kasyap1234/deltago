@@ -24,7 +24,7 @@ type BullCallSpread struct {
 func NewBullCallSpread(client *delta.Client, positionSize int) *BullCallSpread {
 	return &BullCallSpread{
 		BaseStrategy: BaseStrategy{
-			id:                 "bull_call_spread",
+			id:                 "bcs",
 			name:               "Bull Call Spread",
 			client:             client,
 			PositionSize:       positionSize,
@@ -109,20 +109,20 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 
 	// Check transaction costs
 	costs := in.Portfolio.Costs.EstimateCost(netDebit, true, 2)
-	if (shortStrike-longStrike-netDebit) < costs*2 {
+	if (shortStrike - longStrike - netDebit) < costs*2 {
 		return nil, fmt.Errorf("insufficient edge after costs: edge=%.2f costs=%.2f", shortStrike-longStrike-netDebit, costs)
 	}
 
 	// Prepare metadata
 	legs := []Leg{
 		{
-			ID: "long_call", InstrumentID: longCall.ProductID, Symbol: longCall.Symbol,
+			ID: "lc", InstrumentID: longCall.ProductID, Symbol: longCall.Symbol,
 			Side: execution.Buy, Qty: s.PositionSize, EntryPrice: longPrice,
 			Strike: longStrike, OptionType: "call",
 			Delta: parseFloat(longCall.Greeks.Delta), Gamma: parseFloat(longCall.Greeks.Gamma),
 		},
 		{
-			ID: "short_call", InstrumentID: shortCall.ProductID, Symbol: shortCall.Symbol,
+			ID: "sc", InstrumentID: shortCall.ProductID, Symbol: shortCall.Symbol,
 			Side: execution.Sell, Qty: s.PositionSize, EntryPrice: shortPrice,
 			Strike: shortStrike, OptionType: "call",
 			Delta: parseFloat(shortCall.Greeks.Delta), Gamma: parseFloat(shortCall.Greeks.Gamma),
@@ -143,7 +143,7 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 		AllOrNone:  true,
 		Legs: []execution.OrderRequest{
 			{
-				ClientOrderID: execution.GenerateClientOrderID(strategyID, "long_call", now),
+				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lc", now),
 				InstrumentID:  longCall.ProductID,
 				Symbol:        longCall.Symbol,
 				Side:          execution.Buy,
@@ -153,10 +153,10 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 				PostOnly:      true,
 				TimeInForce:   "gtc",
 				StrategyID:    strategyID,
-				LegID:         "long_call",
+				LegID:         "lc",
 			},
 			{
-				ClientOrderID: execution.GenerateClientOrderID(strategyID, "short_call", now),
+				ClientOrderID: execution.GenerateClientOrderID(strategyID, "sc", now),
 				InstrumentID:  shortCall.ProductID,
 				Symbol:        shortCall.Symbol,
 				Side:          execution.Sell,
@@ -166,7 +166,7 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 				PostOnly:      true,
 				TimeInForce:   "gtc",
 				StrategyID:    strategyID,
-				LegID:         "short_call",
+				LegID:         "sc",
 			},
 		},
 	}

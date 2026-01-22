@@ -98,16 +98,16 @@ func (o *OrderState) RemainingQty() int {
 type Manager interface {
 	// Place places an order and returns immediately
 	Place(ctx context.Context, req OrderRequest) (*OrderAck, error)
-	
+
 	// PlaceAndWait places an order and waits for fill or timeout
 	PlaceAndWait(ctx context.Context, req OrderRequest, timeout time.Duration) (*OrderState, error)
-	
+
 	// Cancel cancels an order
 	Cancel(ctx context.Context, exchangeOrderID int64, instrumentID int64) error
-	
+
 	// GetOrder gets current order state
 	GetOrder(ctx context.Context, exchangeOrderID int64) (*OrderState, error)
-	
+
 	// GetFills gets recent fills
 	GetFills(ctx context.Context, since time.Time) ([]Fill, error)
 
@@ -144,7 +144,7 @@ func ExecuteMultiLeg(ctx context.Context, mgr Manager, order MultiLegOrder) (*Mu
 		LegResults: make(map[string]*OrderState),
 		StartedAt:  time.Now(),
 	}
-	
+
 	// Separate buy and sell legs
 	var buyLegs, sellLegs []OrderRequest
 	for _, leg := range order.Legs {
@@ -154,20 +154,20 @@ func ExecuteMultiLeg(ctx context.Context, mgr Manager, order MultiLegOrder) (*Mu
 			sellLegs = append(sellLegs, leg)
 		}
 	}
-	
+
 	// Execute buy legs first (protection)
 	for _, leg := range buyLegs {
 		var state *OrderState
 		var err error
-		
+
 		if order.UseRetry {
 			state, err = mgr.PlaceWithRetry(ctx, leg, order.Timeout, order.RetryCfg)
 		} else {
 			state, err = mgr.PlaceAndWait(ctx, leg, order.Timeout)
 		}
-		
+
 		result.LegResults[leg.LegID] = state
-		
+
 		if err != nil || (state != nil && state.Status != StatusFilled) {
 			result.Error = fmt.Errorf("buy leg %s failed: %w", leg.LegID, err)
 			if order.AllOrNone {
@@ -191,20 +191,20 @@ func ExecuteMultiLeg(ctx context.Context, mgr Manager, order MultiLegOrder) (*Mu
 			return result, result.Error
 		}
 	}
-	
+
 	// Execute sell legs (now protected by buy legs)
 	for _, leg := range sellLegs {
 		var state *OrderState
 		var err error
-		
+
 		if order.UseRetry {
 			state, err = mgr.PlaceWithRetry(ctx, leg, order.Timeout, order.RetryCfg)
 		} else {
 			state, err = mgr.PlaceAndWait(ctx, leg, order.Timeout)
 		}
-		
+
 		result.LegResults[leg.LegID] = state
-		
+
 		if err != nil || (state != nil && state.Status != StatusFilled) {
 			result.Error = fmt.Errorf("sell leg %s failed: %w", leg.LegID, err)
 			if order.AllOrNone {
@@ -232,7 +232,7 @@ func ExecuteMultiLeg(ctx context.Context, mgr Manager, order MultiLegOrder) (*Mu
 			return result, result.Error
 		}
 	}
-	
+
 	result.FullyFilled = true
 	result.CompletedAt = time.Now()
 	return result, nil
@@ -240,5 +240,5 @@ func ExecuteMultiLeg(ctx context.Context, mgr Manager, order MultiLegOrder) (*Mu
 
 // GenerateClientOrderID creates a deterministic order ID
 func GenerateClientOrderID(strategyID, legID string, timestamp time.Time) string {
-	return fmt.Sprintf("%s_%s_%d", strategyID, legID, timestamp.UnixMilli())
+	return fmt.Sprintf("%s_%s", strategyID, legID)
 }
