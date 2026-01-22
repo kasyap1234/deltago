@@ -259,10 +259,18 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 
 			// Walk the price
 			stepAmount := originalPrice * cfg.PriceStepPct * float64(attempt)
+			if stepAmount == 0 {
+				// Fallback if price is 0 (common on empty testnet books)
+				stepAmount = 0.01 * float64(attempt)
+			}
+
 			if req.Side == Buy {
 				req.Price = originalPrice + stepAmount // Bid higher
 			} else {
 				req.Price = originalPrice - stepAmount // Offer lower
+			}
+			if req.Price < 0 {
+				req.Price = 0
 			}
 
 			// If we have an active order, use EditOrder instead of PlaceAndWait
@@ -295,6 +303,7 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 		var err error
 		state, err = m.PlaceAndWait(ctx, req, timeout/time.Duration(cfg.MaxRetries+1))
 		if err != nil {
+			fmt.Printf("DEBUG: Order attempt %d failed: %v (Price: %.4f)\n", attempt, err, req.Price)
 			// If error was post_only rejection, we just continue to next attempt (higher/lower price)
 			continue
 		}
