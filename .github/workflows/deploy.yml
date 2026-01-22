@@ -77,10 +77,12 @@ jobs:
                 git clone https://github.com/\$GITHUB_REPOSITORY.git \$DEPLOY_DIR
               fi
 
-              # Build
-              echo 'Building Go binary...'
+              # Build both binaries
+              echo 'Building Go binaries...'
               cd \$DEPLOY_DIR/cmd/bot
               /usr/local/go/bin/go build -o \$DEPLOY_DIR/bot .
+              cd \$DEPLOY_DIR/cmd/adaptive
+              /usr/local/go/bin/go build -o \$DEPLOY_DIR/adaptive .
 
               # Setup env file from the one we copied
               echo 'Setting up environment...'
