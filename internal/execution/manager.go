@@ -249,8 +249,17 @@ var DefaultRetryConfig = RetryConfig{
 func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, timeout time.Duration, cfg RetryConfig) (*OrderState, error) {
 	originalPrice := req.Price
 	var state *OrderState
+	baseClientOrderID := req.ClientOrderID
 	for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
 		if attempt > 0 {
+			// Ensure unique ClientOrderID for each retry to avoid duplicate_client_order_id
+			if baseClientOrderID != "" {
+				req.ClientOrderID = fmt.Sprintf("%s_r%d", baseClientOrderID, attempt)
+				if len(req.ClientOrderID) > 32 {
+					// Fallback to just the suffix if too long, though shouldn't happen with our current naming
+					req.ClientOrderID = req.ClientOrderID[len(req.ClientOrderID)-32:]
+				}
+			}
 			// Wait before retry
 			select {
 			case <-ctx.Done():
@@ -320,7 +329,10 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 		}
 	}
 
-	return nil, fmt.Errorf("failed after %d retries", cfg.MaxRetries)
+	if state != nil {
+		return state, fmt.Errorf("failed after %d retries", cfg.MaxRetries)
+	}
+	return nil, fmt.Errorf("failed after %d retries and no state available", cfg.MaxRetries)
 }
 
 func (m *DeltaManager) Cancel(ctx context.Context, exchangeOrderID int64, instrumentID int64) error {
