@@ -262,7 +262,8 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 			stepAmount := originalPrice * cfg.PriceStepPct * float64(attempt)
 			if stepAmount == 0 {
 				// Fallback if price is 0 (common on empty testnet books)
-				stepAmount = 0.01 * float64(attempt)
+				// Use more aggressive step for testnet (1.0 vs 0.01)
+				stepAmount = 1.0 * float64(attempt)
 			}
 
 			if req.Side == Buy {
