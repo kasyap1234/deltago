@@ -62,25 +62,14 @@ if ! command -v git > /dev/null; then
   sudo apt-get update && sudo apt-get install -y git
 fi
 
-# Setup directories with proper ownership
-sudo mkdir -p \$DEPLOY_DIR
-sudo chown -R \$USER:\$USER \$DEPLOY_DIR
+# Setup directories
 sudo mkdir -p /etc/deltago
 
-# Update code
+# Always fresh clone to avoid permission issues
+echo 'Cloning repository (fresh)...'
+sudo rm -rf \$DEPLOY_DIR
+git clone --depth 1 --branch main https://github.com/\$GITHUB_REPOSITORY.git \$DEPLOY_DIR
 cd \$DEPLOY_DIR
-if [ -d \".git\" ]; then
-  echo 'Updating repository...'
-  git config --global --add safe.directory \$DEPLOY_DIR
-  git fetch origin main
-  git reset --hard origin/main
-else
-  echo 'Cloning repository...'
-  cd /tmp
-  sudo rm -rf \$DEPLOY_DIR
-  git clone https://github.com/\$GITHUB_REPOSITORY.git \$DEPLOY_DIR
-  cd \$DEPLOY_DIR
-fi
 
 # Build both binaries
 echo 'Building Go binaries...'
