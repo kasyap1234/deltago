@@ -23,7 +23,7 @@ type IronCondor struct {
 func NewIronCondor(client *delta.Client, positionSize int, shortDelta float64, wingWidth int) *IronCondor {
 	return &IronCondor{
 		BaseStrategy: BaseStrategy{
-			id:                 "ic",
+			id:                 "iron_condor",
 			name:               "Iron Condor",
 			client:             client,
 			PositionSize:       positionSize,
@@ -124,10 +124,12 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
 	// Calculate prices
-	shortCallPrice := parseFloat(shortCall.Quotes.BestAsk)
-	shortPutPrice := parseFloat(shortPut.Quotes.BestAsk)
-	longCallPrice := parseFloat(longCall.Quotes.BestBid)
-	longPutPrice := parseFloat(longPut.Quotes.BestBid)
+	// SELL orders use BestBid (price buyers will pay us)
+	// BUY orders use BestAsk (price we pay sellers)
+	shortCallPrice := parseFloat(shortCall.Quotes.BestBid)
+	shortPutPrice := parseFloat(shortPut.Quotes.BestBid)
+	longCallPrice := parseFloat(longCall.Quotes.BestAsk)
+	longPutPrice := parseFloat(longPut.Quotes.BestAsk)
 
 	// Net credit = premium received - premium paid
 	netCredit := (shortCallPrice + shortPutPrice - longCallPrice - longPutPrice) * float64(s.PositionSize)
@@ -137,7 +139,9 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 	}
 
 	// Check if credit covers transaction costs (require 2x costs)
-	costs := in.Portfolio.Costs.EstimateCost(netCredit, true, 4) // 4 legs, maker (PostOnly)
+	// Use gross premium (sum of absolute leg values) for cost estimation, not net credit
+	grossPremium := (shortCallPrice + shortPutPrice + longCallPrice + longPutPrice) * float64(s.PositionSize)
+	costs := in.Portfolio.Costs.EstimateCost(grossPremium, true, 4) // 4 legs, maker (PostOnly)
 	if netCredit < costs*2 {
 		return nil, fmt.Errorf("insufficient edge after costs: credit=%.2f costs=%.2f", netCredit, costs)
 	}
@@ -341,8 +345,8 @@ func (s *IronCondor) ConfirmEntry(ctx context.Context, result *execution.MultiLe
 		breakevenHigh = shortCallStrike + netPremium/float64(s.PositionSize)
 	}
 
-	// NOW set the position with actual fill data
-	s.position = &StrategyPosition{
+	// NOW set the position with actual fill data (thread-safe)
+	s.SetPosition(&StrategyPosition{
 		StrategyID:    result.StrategyID,
 		EntryTime:     result.CompletedAt,
 		NetPremium:    netPremium,
@@ -351,7 +355,7 @@ func (s *IronCondor) ConfirmEntry(ctx context.Context, result *execution.MultiLe
 		BreakevenLow:  breakevenLow,
 		BreakevenHigh: breakevenHigh,
 		Legs:          legs,
-	}
+	})
 
 	return nil
 }

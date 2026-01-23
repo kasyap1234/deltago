@@ -25,6 +25,7 @@ type Manager struct {
 	stopChan        chan struct{}
 	mu              sync.Mutex
 	checkMu         sync.Mutex // Prevents concurrent stop-loss checks
+	stopOnce        sync.Once  // Prevents double-close panic
 	dailyPnL        float64
 	monitorInterval time.Duration
 	isRunning       bool
@@ -58,6 +59,8 @@ func (m *Manager) Start() error {
 		return nil
 	}
 	m.isRunning = true
+	m.stopChan = make(chan struct{}) // Recreate channel for restart
+	m.stopOnce = sync.Once{}         // Reset once for restart
 	m.mu.Unlock()
 
 	// Connect WebSocket for real-time updates
@@ -83,18 +86,20 @@ func (m *Manager) Start() error {
 	return nil
 }
 
-// Stop stops the risk monitoring
+// Stop stops the risk monitoring - safe to call multiple times
 func (m *Manager) Stop() {
-	m.mu.Lock()
-	if !m.isRunning {
+	m.stopOnce.Do(func() {
+		m.mu.Lock()
+		if !m.isRunning {
+			m.mu.Unlock()
+			return
+		}
+		m.isRunning = false
 		m.mu.Unlock()
-		return
-	}
-	m.isRunning = false
-	m.mu.Unlock()
 
-	close(m.stopChan)
-	m.wsClient.Close()
+		close(m.stopChan)
+		m.wsClient.Close()
+	})
 }
 
 func (m *Manager) monitorLoop() {

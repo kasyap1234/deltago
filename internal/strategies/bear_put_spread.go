@@ -23,7 +23,7 @@ type BearPutSpread struct {
 func NewBearPutSpread(client *delta.Client, positionSize int) *BearPutSpread {
 	return &BearPutSpread{
 		BaseStrategy: BaseStrategy{
-			id:                 "bps",
+			id:                 "bear_put_spread",
 			name:               "Bear Put Spread",
 			client:             client,
 			PositionSize:       positionSize,
@@ -94,16 +94,19 @@ func (s *BearPutSpread) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
 	// Calculate prices for orders
-	longPrice := parseFloat(longPut.Quotes.BestBid)
-	shortPrice := parseFloat(shortPut.Quotes.BestAsk)
+	// BUY orders use BestAsk (price we pay sellers)
+	// SELL orders use BestBid (price buyers will pay us)
+	longPrice := parseFloat(longPut.Quotes.BestAsk)
+	shortPrice := parseFloat(shortPut.Quotes.BestBid)
 	netDebit := longPrice - shortPrice
 
 	if netDebit <= 0 {
 		return nil, fmt.Errorf("negative net debit: %.2f", netDebit)
 	}
 
-	// Check transaction costs
-	costs := in.Portfolio.Costs.EstimateCost(netDebit, true, 2)
+	// Check transaction costs - use gross premium (sum of leg values) not net
+	grossPremium := (longPrice + shortPrice) * float64(s.PositionSize)
+	costs := in.Portfolio.Costs.EstimateCost(grossPremium, true, 2)
 	if (longStrike - shortStrike - netDebit) < costs*2 {
 		return nil, fmt.Errorf("insufficient edge after costs: edge=%.2f costs=%.2f", longStrike-shortStrike-netDebit, costs)
 	}
@@ -227,15 +230,15 @@ func (s *BearPutSpread) ConfirmEntry(ctx context.Context, result *execution.Mult
 		maxProfit = metadata.MaxProfit
 	}
 
-	// NOW set the position with actual fill data
-	s.position = &StrategyPosition{
+	// NOW set the position with actual fill data (thread-safe)
+	s.SetPosition(&StrategyPosition{
 		StrategyID: result.StrategyID,
 		EntryTime:  result.CompletedAt,
 		NetPremium: netPremium,
 		MaxLoss:    maxLoss,
 		MaxProfit:  maxProfit,
 		Legs:       legs,
-	}
+	})
 
 	return nil
 }

@@ -333,12 +333,21 @@ func (w *WebSocketClient) dispatchHandlers(eventType string, data json.RawMessag
 }
 
 func (w *WebSocketClient) keepAlive() {
+	// Capture ticker locally to avoid nil dereference during reconnect
+	w.mu.Lock()
+	ticker := w.pingTicker
+	w.mu.Unlock()
+
+	if ticker == nil {
+		return
+	}
+
 	for {
 		select {
 		case <-w.done:
-			w.pingTicker.Stop()
+			ticker.Stop()
 			return
-		case <-w.pingTicker.C:
+		case <-ticker.C:
 			w.mu.Lock()
 			if w.isConnected && w.conn != nil {
 				if err := w.conn.WriteJSON(map[string]string{"type": "ping"}); err != nil {

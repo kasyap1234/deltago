@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/kiwhtas/deltago/internal/delta"
@@ -112,6 +113,7 @@ type BaseStrategy struct {
 	name     string
 	client   *delta.Client
 	position *StrategyPosition
+	mu       sync.RWMutex // Protects position access
 
 	// Configuration
 	PositionSize       int
@@ -124,11 +126,29 @@ func (b *BaseStrategy) ID() string   { return b.id }
 func (b *BaseStrategy) Name() string { return b.name }
 
 func (b *BaseStrategy) HasPosition() bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	return b.position != nil && len(b.position.Legs) > 0
 }
 
 func (b *BaseStrategy) GetPosition() *StrategyPosition {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	return b.position
+}
+
+// SetPosition sets the position with proper locking
+func (b *BaseStrategy) SetPosition(pos *StrategyPosition) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.position = pos
+}
+
+// ClearPosition clears the position with proper locking
+func (b *BaseStrategy) ClearPosition() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.position = nil
 }
 
 func (b *BaseStrategy) OnFill(ctx context.Context, fill execution.Fill) error {

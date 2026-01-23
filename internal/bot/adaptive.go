@@ -545,8 +545,15 @@ func (b *AdaptiveBot) reconcilePositions(ctx context.Context) {
 		seenIDs[pos.ProductID] = true
 
 		var entryPrice, unrealizedPnL float64
-		fmt.Sscanf(pos.EntryPrice, "%f", &entryPrice)
-		fmt.Sscanf(pos.UnrealizedPnL, "%f", &unrealizedPnL)
+		if _, err := fmt.Sscanf(pos.EntryPrice, "%f", &entryPrice); err != nil {
+			log.Printf("Warning: failed to parse entry price for %s: %v", pos.ProductSymbol, err)
+		}
+		if _, err := fmt.Sscanf(pos.UnrealizedPnL, "%f", &unrealizedPnL); err != nil {
+			log.Printf("Warning: failed to parse unrealized P&L for %s: %v", pos.ProductSymbol, err)
+		}
+
+		// Look up strategy ID from our mapping
+		strategyID := b.portfolio.GetStrategyIDForInstrument(pos.ProductID)
 
 		b.portfolio.UpdatePosition(&portfolio.Position{
 			InstrumentID:  pos.ProductID,
@@ -554,6 +561,7 @@ func (b *AdaptiveBot) reconcilePositions(ctx context.Context) {
 			Qty:           int64(pos.Size),
 			AvgPrice:      entryPrice,
 			UnrealizedPnL: unrealizedPnL,
+			StrategyID:    strategyID,
 		})
 	}
 

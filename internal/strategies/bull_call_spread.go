@@ -24,7 +24,7 @@ type BullCallSpread struct {
 func NewBullCallSpread(client *delta.Client, positionSize int) *BullCallSpread {
 	return &BullCallSpread{
 		BaseStrategy: BaseStrategy{
-			id:                 "bcs",
+			id:                 "bull_call_spread",
 			name:               "Bull Call Spread",
 			client:             client,
 			PositionSize:       positionSize,
@@ -98,8 +98,10 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 	now := time.Now()
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
-	longPrice := parseFloat(longCall.Quotes.BestBid)
-	shortPrice := parseFloat(shortCall.Quotes.BestAsk)
+	// BUY orders use BestAsk (price we pay sellers)
+	// SELL orders use BestBid (price buyers will pay us)
+	longPrice := parseFloat(longCall.Quotes.BestAsk)
+	shortPrice := parseFloat(shortCall.Quotes.BestBid)
 	netDebit := longPrice - shortPrice
 
 	// Check if debit is positive
@@ -107,8 +109,9 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 		return nil, fmt.Errorf("negative net debit: %.2f", netDebit)
 	}
 
-	// Check transaction costs
-	costs := in.Portfolio.Costs.EstimateCost(netDebit, true, 2)
+	// Check transaction costs - use gross premium (sum of leg values) not net
+	grossPremium := (longPrice + shortPrice) * float64(s.PositionSize)
+	costs := in.Portfolio.Costs.EstimateCost(grossPremium, true, 2)
 	if (shortStrike - longStrike - netDebit) < costs*2 {
 		return nil, fmt.Errorf("insufficient edge after costs: edge=%.2f costs=%.2f", shortStrike-longStrike-netDebit, costs)
 	}
@@ -238,15 +241,15 @@ func (s *BullCallSpread) ConfirmEntry(ctx context.Context, result *execution.Mul
 		maxProfit = metadata.MaxProfit
 	}
 
-	// NOW set the position with actual fill data
-	s.position = &StrategyPosition{
+	// NOW set the position with actual fill data (thread-safe)
+	s.SetPosition(&StrategyPosition{
 		StrategyID: result.StrategyID,
 		EntryTime:  result.CompletedAt,
 		NetPremium: netPremium,
 		MaxLoss:    maxLoss,
 		MaxProfit:  maxProfit,
 		Legs:       legs,
-	}
+	})
 
 	return nil
 }

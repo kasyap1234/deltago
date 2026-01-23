@@ -193,17 +193,17 @@ func TestIronCondor_BuildEntryOrders(t *testing.T) {
 		legs[l.LegID] = l
 	}
 	
-	if legs["short_call"].Symbol != "CALL_110" {
-		t.Errorf("Expected short_call CALL_110, got %s", legs["short_call"].Symbol)
+	if legs["sc"].Symbol != "CALL_110" {
+		t.Errorf("Expected sc (short call) CALL_110, got %s", legs["sc"].Symbol)
 	}
-	if legs["short_put"].Symbol != "PUT_90" {
-		t.Errorf("Expected short_put PUT_90, got %s", legs["short_put"].Symbol)
+	if legs["sp"].Symbol != "PUT_90" {
+		t.Errorf("Expected sp (short put) PUT_90, got %s", legs["sp"].Symbol)
 	}
-	if legs["long_call"].Symbol != "CALL_115" {
-		t.Errorf("Expected long_call CALL_115, got %s", legs["long_call"].Symbol)
+	if legs["lc"].Symbol != "CALL_115" {
+		t.Errorf("Expected lc (long call) CALL_115, got %s", legs["lc"].Symbol)
 	}
-	if legs["long_put"].Symbol != "PUT_85" {
-		t.Errorf("Expected long_put PUT_85, got %s", legs["long_put"].Symbol)
+	if legs["lp"].Symbol != "PUT_85" {
+		t.Errorf("Expected lp (long put) PUT_85, got %s", legs["lp"].Symbol)
 	}
 	
 	// Credit Check

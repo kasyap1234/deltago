@@ -22,7 +22,7 @@ type ProtectivePut struct {
 func NewProtectivePut(client *delta.Client, positionSize int) *ProtectivePut {
 	return &ProtectivePut{
 		BaseStrategy: BaseStrategy{
-			id:                 "pp",
+			id:                 "protective_put",
 			name:               "Protective Put",
 			client:             client,
 			PositionSize:       positionSize,
@@ -76,7 +76,8 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	now := time.Now()
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
-	putPrice := parseFloat(put.Quotes.BestBid)
+	// BUY orders use BestAsk (price we pay sellers)
+	putPrice := parseFloat(put.Quotes.BestAsk)
 	totalDebit := putPrice * float64(s.PositionSize)
 
 	// Prepare metadata
@@ -157,8 +158,8 @@ func (s *ProtectivePut) ConfirmEntry(ctx context.Context, result *execution.Mult
 
 	totalPremium := legState.AvgFillPrice * float64(legState.FilledQty)
 
-	// NOW set the position with actual fill data
-	s.position = &StrategyPosition{
+	// NOW set the position with actual fill data (thread-safe)
+	s.SetPosition(&StrategyPosition{
 		StrategyID:   result.StrategyID,
 		EntryTime:    result.CompletedAt,
 		NetPremium:   -totalPremium,
@@ -166,7 +167,7 @@ func (s *ProtectivePut) ConfirmEntry(ctx context.Context, result *execution.Mult
 		MaxProfit:    leg.Strike * float64(s.PositionSize),
 		BreakevenLow: leg.Strike - legState.AvgFillPrice,
 		Legs:         []Leg{leg},
-	}
+	})
 
 	return nil
 }

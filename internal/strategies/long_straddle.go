@@ -20,7 +20,7 @@ type LongStraddle struct {
 func NewLongStraddle(client *delta.Client, positionSize int) *LongStraddle {
 	return &LongStraddle{
 		BaseStrategy: BaseStrategy{
-			id:                 "ls",
+			id:                 "long_straddle",
 			name:               "Long Straddle",
 			client:             client,
 			PositionSize:       positionSize,
@@ -83,8 +83,9 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 	now := time.Now()
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
-	callPrice := parseFloat(atmCall.Quotes.BestBid)
-	putPrice := parseFloat(atmPut.Quotes.BestBid)
+	// BUY orders use BestAsk (price we pay sellers)
+	callPrice := parseFloat(atmCall.Quotes.BestAsk)
+	putPrice := parseFloat(atmPut.Quotes.BestAsk)
 	totalDebit := (callPrice + putPrice) * float64(s.PositionSize)
 
 	// Prepare metadata
@@ -209,8 +210,8 @@ func (s *LongStraddle) ConfirmEntry(ctx context.Context, result *execution.Multi
 		breakevenHigh = atmStrike + premiumPerContract
 	}
 
-	// NOW set the position with actual fill data
-	s.position = &StrategyPosition{
+	// NOW set the position with actual fill data (thread-safe)
+	s.SetPosition(&StrategyPosition{
 		StrategyID:    result.StrategyID,
 		EntryTime:     result.CompletedAt,
 		NetPremium:    netPremium,
@@ -219,7 +220,7 @@ func (s *LongStraddle) ConfirmEntry(ctx context.Context, result *execution.Multi
 		BreakevenLow:  breakevenLow,
 		BreakevenHigh: breakevenHigh,
 		Legs:          legs,
-	}
+	})
 
 	return nil
 }

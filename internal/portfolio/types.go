@@ -66,6 +66,9 @@ type State struct {
 	// Track strategy entries for P&L calculation
 	StrategyEntries map[string][]LegEntry // strategyID -> legs
 
+	// Track instrument to strategy mapping for reconciliation
+	InstrumentToStrategy map[int64]string // instrumentID -> strategyID
+
 	Costs TransactionCosts
 
 	AsOf time.Time
@@ -74,12 +77,13 @@ type State struct {
 // NewState creates a new portfolio state
 func NewState(initialEquity float64, maxDailyLoss float64) *State {
 	return &State{
-		Equity:          initialEquity,
-		MaxDailyLoss:    maxDailyLoss,
-		Positions:       make(map[int64]*Position),
-		StrategyEntries: make(map[string][]LegEntry),
-		Costs:           DefaultTransactionCosts(),
-		AsOf:            time.Now(),
+		Equity:               initialEquity,
+		MaxDailyLoss:         maxDailyLoss,
+		Positions:            make(map[int64]*Position),
+		StrategyEntries:      make(map[string][]LegEntry),
+		InstrumentToStrategy: make(map[int64]string),
+		Costs:                DefaultTransactionCosts(),
+		AsOf:                 time.Now(),
 	}
 }
 
@@ -156,6 +160,29 @@ func (s *State) RecordStrategyEntry(strategyID string, entries []LegEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.StrategyEntries[strategyID] = entries
+
+	// Also record instrument-to-strategy mapping for reconciliation
+	for _, entry := range entries {
+		s.InstrumentToStrategy[entry.InstrumentID] = strategyID
+	}
+}
+
+// GetStrategyIDForInstrument returns the strategy ID that owns this instrument
+func (s *State) GetStrategyIDForInstrument(instrumentID int64) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.InstrumentToStrategy[instrumentID]
+}
+
+// ClearInstrumentMapping removes instrument mappings for a strategy
+func (s *State) ClearInstrumentMapping(strategyID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for instrID, strat := range s.InstrumentToStrategy {
+		if strat == strategyID {
+			delete(s.InstrumentToStrategy, instrID)
+		}
+	}
 }
 
 // CalculateStrategyPnL calculates realized P&L for a closed strategy
