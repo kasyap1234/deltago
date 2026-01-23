@@ -549,26 +549,18 @@ func (b *AdaptiveBot) reconcilePositions(ctx context.Context) {
 			log.Printf("Warning: failed to parse entry price for %s: %v", pos.ProductSymbol, err)
 		}
 
-		// Fetch current mark price from ticker for accurate UPnL
-		unrealizedPnL := 0.0
+		// Use API's unrealized_pnl directly - Delta Exchange calculates it correctly
+		// with proper unit conversions (mark_price is in different units than entry_price)
+		var unrealizedPnL float64
+		if _, err := fmt.Sscanf(pos.UnrealizedPnL, "%f", &unrealizedPnL); err != nil {
+			log.Printf("Warning: failed to parse unrealized P&L for %s: %v", pos.ProductSymbol, err)
+		}
+
+		// Get current mark price for display purposes only
 		var currentMarkPrice float64
 		ticker, err := b.client.GetTicker(pos.ProductSymbol)
-		if err == nil && ticker.MarkPrice != "" {
-			if _, err := fmt.Sscanf(ticker.MarkPrice, "%f", &currentMarkPrice); err == nil && currentMarkPrice > 0 {
-				// Calculate UPnL: (Mark - Entry) * Size * 0.001 (contract multiplier)
-				unrealizedPnL = (currentMarkPrice - entryPrice) * float64(pos.Size) * 0.001
-				log.Printf("DEBUG UPnL: %s mark=%.2f entry=%.2f size=%d upnl=%.4f",
-					pos.ProductSymbol, currentMarkPrice, entryPrice, pos.Size, unrealizedPnL)
-			} else {
-				// Mark price is 0 or invalid - fall back to API value
-				log.Printf("Warning: mark price is zero or invalid for %s (raw: %s, parsed: %.4f), using API UPnL",
-					pos.ProductSymbol, ticker.MarkPrice, currentMarkPrice)
-				fmt.Sscanf(pos.UnrealizedPnL, "%f", &unrealizedPnL)
-			}
-		} else {
-			// Fallback to API value if ticker fetch fails, but log a warning
-			log.Printf("Warning: failed to fetch ticker for %s (err: %v), falling back to API UPnL", pos.ProductSymbol, err)
-			fmt.Sscanf(pos.UnrealizedPnL, "%f", &unrealizedPnL)
+		if err == nil {
+			fmt.Sscanf(ticker.MarkPrice, "%f", &currentMarkPrice)
 		}
 
 		// Look up strategy ID from our mapping
