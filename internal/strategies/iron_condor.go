@@ -3,6 +3,7 @@ package strategies
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/kiwhtas/deltago/internal/delta"
@@ -132,7 +133,8 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 	longPutPrice := parseFloat(longPut.Quotes.BestAsk)
 
 	// Net credit = premium received - premium paid
-	netCredit := (shortCallPrice + shortPutPrice - longCallPrice - longPutPrice) * float64(s.PositionSize)
+	multiplier := 0.001
+	netCredit := (shortCallPrice + shortPutPrice - longCallPrice - longPutPrice) * float64(s.PositionSize) * multiplier
 
 	if netCredit <= 0 {
 		return nil, fmt.Errorf("negative net credit: %.2f", netCredit)
@@ -185,7 +187,7 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 		maxSpreadWidth = width
 	}
 
-	maxLoss := (maxSpreadWidth * float64(s.PositionSize)) - netCredit
+	maxLoss := ((maxSpreadWidth * float64(s.PositionSize)) * multiplier) - netCredit
 
 	metadata := &StrategyPositionMetadata{
 		NetPremium:    netCredit,
@@ -384,6 +386,7 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 
 	// Calculate current P&L
 	// For iron condor: P&L = net credit - cost to close
+	multiplier := 0.001
 	costToClose := 0.0
 	for _, leg := range pos.Legs {
 		if leg.Side == execution.Buy {
@@ -394,21 +397,25 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 			costToClose += leg.CurrentPrice * float64(leg.Qty)
 		}
 	}
+	costToClose *= multiplier
 	pos.CurrentPnL = pos.NetPremium - costToClose
 
 	// Take profit: close at 50% of max profit
 	if pos.CurrentPnL >= pos.MaxProfit*s.TakeProfitPct {
+		log.Printf("📥 Iron Condor: Take Profit triggered (PnL=%.2f, target=%.2f)", pos.CurrentPnL, pos.MaxProfit*s.TakeProfitPct)
 		return s.buildCloseOrderRequests(in)
 	}
 
 	// Stop loss: close at 1.5x premium collected loss
 	stopLossLevel := -pos.NetPremium * s.StopLossMultiplier
 	if pos.CurrentPnL <= stopLossLevel {
+		log.Printf("📥 Iron Condor: Stop Loss triggered (PnL=%.2f, limit=%.2f)", pos.CurrentPnL, stopLossLevel)
 		return s.buildCloseOrderRequests(in)
 	}
 
 	// Regime change: close if trend emerges or crash
 	if in.Regime.Trend != regime.TrendSideways || in.Regime.Stress == regime.StressCrash {
+		log.Printf("📥 Iron Condor: Regime change exit (Trend=%s, Stress=%s)", in.Regime.Trend, in.Regime.Stress)
 		return s.buildCloseOrderRequests(in)
 	}
 
@@ -420,6 +427,8 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 			threshold := leg.Strike * 0.005 // 0.5% buffer (reduced from 2%)
 			if distance < threshold {
 				// Price approaching short strike - close early
+				log.Printf("📥 Iron Condor: Early exit due to strike breach (Spot=%.2f, Strike=%.2f, Buffer=%.2f)",
+					spot, leg.Strike, threshold)
 				return s.buildCloseOrderRequests(in)
 			}
 		}
