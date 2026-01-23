@@ -36,7 +36,6 @@ jobs:
           printf 'DELTA_API_SECRET=%s\n' "$DELTA_API_SECRET" >> /tmp/deltago.env
           echo "Env file created with $(wc -c < /tmp/deltago.env) bytes"
 
-
       - name: Copy files to VM
         run: |
           gcloud compute scp /tmp/deltago.env instance-20260120-151422:/tmp/deltago.env \
@@ -45,53 +44,49 @@ jobs:
             --strict-host-key-checking=no
 
       - name: Deploy to VM
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           gcloud compute ssh --zone "us-central1-c" "instance-20260120-151422" \
             --project "side-479110" \
             --strict-host-key-checking=no \
             --command "
-set -e
-DEPLOY_DIR=/opt/deltago
-SERVICE_NAME=deltago
-GITHUB_REPOSITORY=${{ github.repository }}
+              set -e
+              DEPLOY_DIR=/opt/deltago
+              SERVICE_NAME=deltago
+              GITHUB_REPOSITORY=${GITHUB_REPOSITORY}
 
-echo '=== DeltaGo Deployment Script ==='
+              echo '=== DeltaGo Deployment Script ==='
 
-# Install git if needed
-if ! command -v git > /dev/null; then
-  echo 'Installing Git...'
-  sudo apt-get update && sudo apt-get install -y git
-fi
+              if ! command -v git > /dev/null; then
+                echo 'Installing Git...'
+                sudo apt-get update && sudo apt-get install -y git
+              fi
 
-# Setup directories
-sudo mkdir -p /etc/deltago
+              sudo mkdir -p /etc/deltago
 
-# Always fresh clone to avoid permission issues
-echo 'Cloning repository (fresh)...'
-sudo rm -rf \$DEPLOY_DIR
-git clone --depth 1 --branch main https://github.com/\$GITHUB_REPOSITORY.git \$DEPLOY_DIR
-cd \$DEPLOY_DIR
+              echo 'Cloning repository (fresh)...'
+              sudo rm -rf \$DEPLOY_DIR
+              git clone --depth 1 --branch main https://github.com/\$GITHUB_REPOSITORY.git \$DEPLOY_DIR
+              cd \$DEPLOY_DIR
 
-# Build both binaries
-echo 'Building Go binaries...'
-cd \$DEPLOY_DIR/cmd/bot
-/usr/local/go/bin/go build -o \$DEPLOY_DIR/bot .
-cd \$DEPLOY_DIR/cmd/adaptive
-/usr/local/go/bin/go build -o \$DEPLOY_DIR/adaptive .
+              echo 'Building Go binaries...'
+              cd \$DEPLOY_DIR/cmd/bot
+              /usr/local/go/bin/go build -o \$DEPLOY_DIR/bot .
+              cd \$DEPLOY_DIR/cmd/adaptive
+              /usr/local/go/bin/go build -o \$DEPLOY_DIR/adaptive .
 
-# Setup env file from the one we copied
-echo 'Setting up environment...'
-sudo cp /tmp/deltago.env /etc/deltago/env
-sudo chmod 600 /etc/deltago/env
+              echo 'Setting up environment...'
+              sudo cp /tmp/deltago.env /etc/deltago/env
+              sudo chmod 600 /etc/deltago/env
 
-# Service management
-echo 'Setting up systemd service...'
-sudo cp \$DEPLOY_DIR/deploy/deltago.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl stop \$SERVICE_NAME 2>/dev/null || true
-sudo systemctl enable \$SERVICE_NAME
-sudo systemctl restart \$SERVICE_NAME
+              echo 'Setting up systemd service...'
+              sudo cp \$DEPLOY_DIR/deploy/deltago.service /etc/systemd/system/
+              sudo systemctl daemon-reload
+              sudo systemctl stop \$SERVICE_NAME 2>/dev/null || true
+              sudo systemctl enable \$SERVICE_NAME
+              sudo systemctl restart \$SERVICE_NAME
 
-echo '=== Deployment Complete ==='
-sudo systemctl status \$SERVICE_NAME --no-pager
-"
+              echo '=== Deployment Complete ==='
+              sudo systemctl status \$SERVICE_NAME --no-pager
+            "
