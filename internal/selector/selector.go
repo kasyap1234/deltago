@@ -14,10 +14,10 @@ import (
 
 // StrategyIntent represents intent to run a strategy
 type StrategyIntent struct {
-	StrategyID   string
-	Strategy     strategies.Strategy
-	Weight       float64 // fraction of risk budget
-	Reason       string
+	StrategyID string
+	Strategy   strategies.Strategy
+	Weight     float64 // fraction of risk budget
+	Reason     string
 }
 
 // StrategyScore holds the score for a strategy
@@ -43,7 +43,7 @@ type Selector interface {
 type RuleBasedSelector struct {
 	mu         sync.RWMutex
 	strategies map[string]strategies.Strategy
-	
+
 	// Configuration
 	MaxStrategiesActive int
 	MinRegimeConfidence float64
@@ -55,7 +55,7 @@ func NewRuleBasedSelector(strats []strategies.Strategy) *RuleBasedSelector {
 	for _, s := range strats {
 		stratMap[s.ID()] = s
 	}
-	
+
 	return &RuleBasedSelector{
 		strategies:          stratMap,
 		MaxStrategiesActive: 3,
@@ -72,32 +72,32 @@ func (s *RuleBasedSelector) BuildPlan(ctx context.Context, r *regime.Regime, pf 
 		Regime:  r,
 		Intents: make([]StrategyIntent, 0),
 	}
-	
+
 	// Skip if regime confidence is too low
 	if r.Score < s.MinRegimeConfidence {
 		return plan, nil
 	}
-	
+
 	// Score all strategies
 	var scores []StrategyScore
 	for _, strat := range s.strategies {
 		score := s.scoreStrategy(strat, r, pf)
-		if score.Score > 0.3 { // Minimum threshold
+		if score.Score > 0.15 { // Lowered from 0.3 to allow Trend-only matches at 0.67 confidence
 			scores = append(scores, score)
 		}
 	}
-	
+
 	// Sort by score descending
 	sort.Slice(scores, func(i, j int) bool {
 		return scores[i].Score > scores[j].Score
 	})
-	
+
 	// Take top N strategies
 	for i := 0; i < len(scores); i++ {
 		if i >= s.MaxStrategiesActive {
 			break
 		}
-		
+
 		plan.Intents = append(plan.Intents, StrategyIntent{
 			StrategyID: scores[i].Strategy.ID(),
 			Strategy:   scores[i].Strategy,
@@ -106,7 +106,7 @@ func (s *RuleBasedSelector) BuildPlan(ctx context.Context, r *regime.Regime, pf 
 		})
 		plan.TotalWeight += scores[i].Score
 	}
-	
+
 	return plan, nil
 }
 
@@ -116,7 +116,7 @@ func (s *RuleBasedSelector) scoreStrategy(strat strategies.Strategy, r *regime.R
 		Score:    0,
 		Reasons:  make([]string, 0),
 	}
-	
+
 	// Base score from regime match
 	suitableRegimes := strat.SuitableRegimes()
 	for _, sr := range suitableRegimes {
@@ -125,7 +125,7 @@ func (s *RuleBasedSelector) scoreStrategy(strat strategies.Strategy, r *regime.R
 			score.Reasons = append(score.Reasons, fmt.Sprintf("matches trend %s", r.Trend))
 		}
 	}
-	
+
 	// Vol preference match - only exact matches get full bonus, VolNormal is a weak match
 	prefVol := strat.PreferredVol()
 	if prefVol == r.Vol {
@@ -137,17 +137,17 @@ func (s *RuleBasedSelector) scoreStrategy(strat strategies.Strategy, r *regime.R
 		score.Reasons = append(score.Reasons, "vol-neutral strategy")
 	}
 	// No bonus if vol preference doesn't match (mismatch is penalty by omission)
-	
+
 	// Regime confidence boost
 	score.Score *= r.Score
-	
+
 	// Penalize if we already have many positions
 	positionCount := len(pf.GetPositionsByStrategy(strat.ID()))
 	if positionCount > 0 {
 		score.Score *= 0.5 // Reduce score for strategies with existing positions
 		score.Reasons = append(score.Reasons, fmt.Sprintf("existing positions: %d", positionCount))
 	}
-	
+
 	// Penalize near event risk - affects ALL short premium strategies
 	if r.EventRisk != regime.EventRiskNone {
 		stratID := strat.ID()
@@ -161,7 +161,7 @@ func (s *RuleBasedSelector) scoreStrategy(strat strategies.Strategy, r *regime.R
 			score.Reasons = append(score.Reasons, "event risk - avoid short premium")
 		}
 	}
-	
+
 	// Special handling for crash - be more aggressive about protection
 	if r.Stress == regime.StressCrash {
 		if strat.ID() == "protective_put" || strat.ID() == "bear_put_spread" {
@@ -172,19 +172,19 @@ func (s *RuleBasedSelector) scoreStrategy(strat strategies.Strategy, r *regime.R
 			score.Reasons = append(score.Reasons, "crash - avoiding non-protective strategy")
 		}
 	}
-	
+
 	return score
 }
 
 // isShortPremiumStrategy returns true if the strategy sells premium (short gamma/vega)
 func isShortPremiumStrategy(stratID string) bool {
 	shortPremiumStrategies := map[string]bool{
-		"iron_condor":       true,
-		"iron_butterfly":    true,
-		"put_credit_spread": true,
+		"iron_condor":        true,
+		"iron_butterfly":     true,
+		"put_credit_spread":  true,
 		"call_credit_spread": true,
-		"short_strangle":    true,
-		"short_straddle":    true,
+		"short_strangle":     true,
+		"short_straddle":     true,
 	}
 	return shortPremiumStrategies[stratID]
 }
