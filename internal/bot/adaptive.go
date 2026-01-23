@@ -410,6 +410,9 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 	}
 
 	if len(plan.Intents) == 0 {
+		if input.Regime.Score >= b.minConfidence {
+			log.Printf("📥 No strategy intents generated for regime: %s/%s", input.Regime.Trend, input.Regime.Vol)
+		}
 		return
 	}
 
@@ -429,6 +432,7 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 		}
 
 		if !shouldEnter {
+			log.Printf("📥 Strategy %s entry skipped: %s", strat.Name(), reason)
 			continue
 		}
 
