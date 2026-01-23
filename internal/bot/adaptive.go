@@ -553,18 +553,21 @@ func (b *AdaptiveBot) reconcilePositions(ctx context.Context) {
 		unrealizedPnL := 0.0
 		var currentMarkPrice float64
 		ticker, err := b.client.GetTicker(pos.ProductSymbol)
-		if err == nil && ticker.MarkPrice != "" && ticker.MarkPrice != "0" {
+		if err == nil && ticker.MarkPrice != "" {
 			if _, err := fmt.Sscanf(ticker.MarkPrice, "%f", &currentMarkPrice); err == nil && currentMarkPrice > 0 {
 				// Calculate UPnL: (Mark - Entry) * Size * 0.001 (contract multiplier)
 				unrealizedPnL = (currentMarkPrice - entryPrice) * float64(pos.Size) * 0.001
+				log.Printf("DEBUG UPnL: %s mark=%.2f entry=%.2f size=%d upnl=%.4f",
+					pos.ProductSymbol, currentMarkPrice, entryPrice, pos.Size, unrealizedPnL)
 			} else {
 				// Mark price is 0 or invalid - fall back to API value
-				log.Printf("Warning: mark price is zero or invalid for %s (raw: %s), using API UPnL", pos.ProductSymbol, ticker.MarkPrice)
+				log.Printf("Warning: mark price is zero or invalid for %s (raw: %s, parsed: %.4f), using API UPnL",
+					pos.ProductSymbol, ticker.MarkPrice, currentMarkPrice)
 				fmt.Sscanf(pos.UnrealizedPnL, "%f", &unrealizedPnL)
 			}
 		} else {
 			// Fallback to API value if ticker fetch fails, but log a warning
-			log.Printf("Warning: failed to fetch ticker for %s, falling back to API UPnL", pos.ProductSymbol)
+			log.Printf("Warning: failed to fetch ticker for %s (err: %v), falling back to API UPnL", pos.ProductSymbol, err)
 			fmt.Sscanf(pos.UnrealizedPnL, "%f", &unrealizedPnL)
 		}
 
