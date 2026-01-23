@@ -255,7 +255,12 @@ type RetryConfig struct {
 	Mode          ExecutionMode // maker or taker
 }
 
-// GenerateClientOrderID creates a deterministic order ID
+// GenerateClientOrderID creates a deterministic order ID (max 32 chars for Delta API)
 func GenerateClientOrderID(strategyID, legID string, timestamp time.Time) string {
-	return fmt.Sprintf("%s_%s", strategyID, legID)
+	id := fmt.Sprintf("%s_%s", strategyID, legID)
+	if len(id) > 32 {
+		// Truncate to 32 chars, keeping the end which has the unique leg info
+		id = id[len(id)-32:]
+	}
+	return id
 }
