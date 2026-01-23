@@ -417,7 +417,7 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 	for _, leg := range pos.Legs {
 		if leg.Side == execution.Sell {
 			distance := abs(spot - leg.Strike)
-			threshold := leg.Strike * 0.02 // 2% buffer
+			threshold := leg.Strike * 0.005 // 0.5% buffer (reduced from 2%)
 			if distance < threshold {
 				// Price approaching short strike - close early
 				return s.buildCloseOrderRequests(in)

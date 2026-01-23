@@ -203,12 +203,13 @@ func (s *State) CalculateStrategyPnL(strategyID string, closeResults map[int64]f
 			continue
 		}
 
+		multiplier := 0.001 // BTC options contract size
 		if entry.Side == "buy" {
-			// Long position: P&L = (exit - entry) * qty
-			totalPnL += (exitPrice - entry.EntryPrice) * float64(entry.Qty)
+			// Long position: P&L = (exit - entry) * qty * multiplier
+			totalPnL += (exitPrice - entry.EntryPrice) * float64(entry.Qty) * multiplier
 		} else {
-			// Short position: P&L = (entry - exit) * qty
-			totalPnL += (entry.EntryPrice - exitPrice) * float64(entry.Qty)
+			// Short position: P&L = (entry - exit) * qty * multiplier
+			totalPnL += (entry.EntryPrice - exitPrice) * float64(entry.Qty) * multiplier
 		}
 	}
 
