@@ -67,7 +67,7 @@ jobs:
 
               echo 'Cloning repository (fresh)...'
               sudo rm -rf \$DEPLOY_DIR
-              git clone --depth 1 --branch main https://github.com/\$GITHUB_REPOSITORY.git \$DEPLOY_DIR
+              sudo git clone --depth 1 --branch main https://github.com/\$GITHUB_REPOSITORY.git \$DEPLOY_DIR
               cd \$DEPLOY_DIR
 
               echo 'Building Go binaries...'
