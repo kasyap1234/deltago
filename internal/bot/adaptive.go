@@ -553,10 +553,14 @@ func (b *AdaptiveBot) reconcilePositions(ctx context.Context) {
 		unrealizedPnL := 0.0
 		var currentMarkPrice float64
 		ticker, err := b.client.GetTicker(pos.ProductSymbol)
-		if err == nil {
-			if _, err := fmt.Sscanf(ticker.MarkPrice, "%f", &currentMarkPrice); err == nil {
+		if err == nil && ticker.MarkPrice != "" && ticker.MarkPrice != "0" {
+			if _, err := fmt.Sscanf(ticker.MarkPrice, "%f", &currentMarkPrice); err == nil && currentMarkPrice > 0 {
 				// Calculate UPnL: (Mark - Entry) * Size * 0.001 (contract multiplier)
 				unrealizedPnL = (currentMarkPrice - entryPrice) * float64(pos.Size) * 0.001
+			} else {
+				// Mark price is 0 or invalid - fall back to API value
+				log.Printf("Warning: mark price is zero or invalid for %s (raw: %s), using API UPnL", pos.ProductSymbol, ticker.MarkPrice)
+				fmt.Sscanf(pos.UnrealizedPnL, "%f", &unrealizedPnL)
 			}
 		} else {
 			// Fallback to API value if ticker fetch fails, but log a warning
