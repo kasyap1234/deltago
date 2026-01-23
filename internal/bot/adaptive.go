@@ -544,12 +544,24 @@ func (b *AdaptiveBot) reconcilePositions(ctx context.Context) {
 		}
 		seenIDs[pos.ProductID] = true
 
-		var entryPrice, unrealizedPnL float64
+		var entryPrice float64
 		if _, err := fmt.Sscanf(pos.EntryPrice, "%f", &entryPrice); err != nil {
 			log.Printf("Warning: failed to parse entry price for %s: %v", pos.ProductSymbol, err)
 		}
-		if _, err := fmt.Sscanf(pos.UnrealizedPnL, "%f", &unrealizedPnL); err != nil {
-			log.Printf("Warning: failed to parse unrealized P&L for %s: %v", pos.ProductSymbol, err)
+
+		// Fetch current mark price from ticker for accurate UPnL
+		unrealizedPnL := 0.0
+		var currentMarkPrice float64
+		ticker, err := b.client.GetTicker(pos.ProductSymbol)
+		if err == nil {
+			if _, err := fmt.Sscanf(ticker.MarkPrice, "%f", &currentMarkPrice); err == nil {
+				// Calculate UPnL: (Mark - Entry) * Size * 0.001 (contract multiplier)
+				unrealizedPnL = (currentMarkPrice - entryPrice) * float64(pos.Size) * 0.001
+			}
+		} else {
+			// Fallback to API value if ticker fetch fails, but log a warning
+			log.Printf("Warning: failed to fetch ticker for %s, falling back to API UPnL", pos.ProductSymbol)
+			fmt.Sscanf(pos.UnrealizedPnL, "%f", &unrealizedPnL)
 		}
 
 		// Look up strategy ID from our mapping
@@ -560,6 +572,7 @@ func (b *AdaptiveBot) reconcilePositions(ctx context.Context) {
 			Symbol:        pos.ProductSymbol,
 			Qty:           int64(pos.Size),
 			AvgPrice:      entryPrice,
+			CurrentPrice:  currentMarkPrice,
 			UnrealizedPnL: unrealizedPnL,
 			StrategyID:    strategyID,
 		})
