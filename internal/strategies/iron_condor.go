@@ -317,12 +317,13 @@ func (s *IronCondor) ConfirmEntry(ctx context.Context, result *execution.MultiLe
 	}
 
 	// Calculate actual net premium from fills
+	multiplier := 0.001
 	netPremium := 0.0
 	for _, leg := range legs {
 		if leg.Side == execution.Sell {
-			netPremium += leg.EntryPrice * float64(leg.Qty)
+			netPremium += leg.EntryPrice * float64(leg.Qty) * multiplier
 		} else {
-			netPremium -= leg.EntryPrice * float64(leg.Qty)
+			netPremium -= leg.EntryPrice * float64(leg.Qty) * multiplier
 		}
 	}
 

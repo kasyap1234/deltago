@@ -84,9 +84,10 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
 	// BUY orders use BestAsk (price we pay sellers)
+	multiplier := 0.001
 	callPrice := parseFloat(atmCall.Quotes.BestAsk)
 	putPrice := parseFloat(atmPut.Quotes.BestAsk)
-	totalDebit := (callPrice + putPrice) * float64(s.PositionSize)
+	totalDebit := (callPrice + putPrice) * float64(s.PositionSize) * multiplier
 
 	// Prepare metadata
 	legs := []Leg{
@@ -194,11 +195,12 @@ func (s *LongStraddle) ConfirmEntry(ctx context.Context, result *execution.Multi
 	}
 
 	// Calculate actual metrics from fills
+	multiplier := 0.001
 	var netPremium, maxLoss, maxProfit, breakevenLow, breakevenHigh float64
 	if metadata != nil {
 		actualNet := 0.0
 		for _, leg := range legs {
-			actualNet -= leg.EntryPrice * float64(leg.Qty)
+			actualNet -= leg.EntryPrice * float64(leg.Qty) * multiplier
 		}
 		netPremium = actualNet
 		maxLoss = -actualNet
@@ -244,9 +246,10 @@ func (s *LongStraddle) Manage(ctx context.Context, in Input) ([]execution.OrderR
 	}
 
 	// Calculate current value
+	multiplier := 0.001
 	currentValue := 0.0
 	for _, leg := range pos.Legs {
-		currentValue += leg.CurrentPrice * float64(leg.Qty)
+		currentValue += leg.CurrentPrice * float64(leg.Qty) * multiplier
 	}
 
 	totalPaid := -pos.NetPremium

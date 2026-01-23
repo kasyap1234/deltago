@@ -110,10 +110,12 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 	}
 
 	// Check transaction costs - use gross premium (sum of leg values) not net
-	grossPremium := (longPrice + shortPrice) * float64(s.PositionSize)
+	multiplier := 0.001
+	grossPremium := (longPrice + shortPrice) * float64(s.PositionSize) * multiplier
+	netDebit = (longPrice - shortPrice) * multiplier
 	costs := in.Portfolio.Costs.EstimateCost(grossPremium, true, 2)
-	if (shortStrike - longStrike - netDebit) < costs*2 {
-		return nil, fmt.Errorf("insufficient edge after costs: edge=%.2f costs=%.2f", shortStrike-longStrike-netDebit, costs)
+	if ((shortStrike-longStrike)*multiplier - netDebit) < costs*2 {
+		return nil, fmt.Errorf("insufficient edge after costs: edge=%.2f costs=%.2f", (shortStrike-longStrike)*multiplier-netDebit, costs)
 	}
 
 	// Prepare metadata
@@ -133,9 +135,9 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 	}
 
 	metadata := &StrategyPositionMetadata{
-		NetPremium: -netDebit,
+		NetPremium: -netDebit * float64(s.PositionSize),
 		MaxLoss:    netDebit * float64(s.PositionSize),
-		MaxProfit:  (shortStrike - longStrike - netDebit) * float64(s.PositionSize),
+		MaxProfit:  ((shortStrike-longStrike)*multiplier - netDebit) * float64(s.PositionSize),
 		Legs:       legs,
 	}
 
@@ -225,15 +227,16 @@ func (s *BullCallSpread) ConfirmEntry(ctx context.Context, result *execution.Mul
 	}
 
 	// Calculate actual metrics from fills
+	multiplier := 0.001
 	var netPremium, maxLoss, maxProfit float64
 	if metadata != nil {
 		// Re-calculate net premium from actual fills
 		actualNet := 0.0
 		for _, leg := range legs {
 			if leg.Side == execution.Buy {
-				actualNet -= leg.EntryPrice * float64(leg.Qty)
+				actualNet -= leg.EntryPrice * float64(leg.Qty) * multiplier
 			} else {
-				actualNet += leg.EntryPrice * float64(leg.Qty)
+				actualNet += leg.EntryPrice * float64(leg.Qty) * multiplier
 			}
 		}
 		netPremium = actualNet
@@ -277,21 +280,22 @@ func (s *BullCallSpread) Manage(ctx context.Context, in Input) ([]execution.Orde
 	}
 
 	// Calculate current P&L
+	multiplier := 0.001
 	currentValue := 0.0
 	for _, leg := range pos.Legs {
 		if leg.Side == execution.Buy {
-			currentValue += leg.CurrentPrice * float64(leg.Qty)
+			currentValue += leg.CurrentPrice * float64(leg.Qty) * multiplier
 		} else {
-			currentValue -= leg.CurrentPrice * float64(leg.Qty)
+			currentValue -= leg.CurrentPrice * float64(leg.Qty) * multiplier
 		}
 	}
 
 	entryValue := 0.0
 	for _, leg := range pos.Legs {
 		if leg.Side == execution.Buy {
-			entryValue -= leg.EntryPrice * float64(leg.Qty)
+			entryValue -= leg.EntryPrice * float64(leg.Qty) * multiplier
 		} else {
-			entryValue += leg.EntryPrice * float64(leg.Qty)
+			entryValue += leg.EntryPrice * float64(leg.Qty) * multiplier
 		}
 	}
 

@@ -105,10 +105,12 @@ func (s *BearPutSpread) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	}
 
 	// Check transaction costs - use gross premium (sum of leg values) not net
-	grossPremium := (longPrice + shortPrice) * float64(s.PositionSize)
+	multiplier := 0.001
+	grossPremium := (longPrice + shortPrice) * float64(s.PositionSize) * multiplier
+	netDebit = (longPrice - shortPrice) * multiplier
 	costs := in.Portfolio.Costs.EstimateCost(grossPremium, true, 2)
-	if (longStrike - shortStrike - netDebit) < costs*2 {
-		return nil, fmt.Errorf("insufficient edge after costs: edge=%.2f costs=%.2f", longStrike-shortStrike-netDebit, costs)
+	if ((longStrike-shortStrike)*multiplier - netDebit) < costs*2 {
+		return nil, fmt.Errorf("insufficient edge after costs: edge=%.2f costs=%.2f", (longStrike-shortStrike)*multiplier-netDebit, costs)
 	}
 
 	// Prepare metadata
@@ -128,9 +130,9 @@ func (s *BearPutSpread) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	}
 
 	metadata := &StrategyPositionMetadata{
-		NetPremium: -netDebit,
+		NetPremium: -netDebit * float64(s.PositionSize),
 		MaxLoss:    netDebit * float64(s.PositionSize),
-		MaxProfit:  (longStrike - shortStrike - netDebit) * float64(s.PositionSize),
+		MaxProfit:  ((longStrike-shortStrike)*multiplier - netDebit) * float64(s.PositionSize),
 		Legs:       legs,
 	}
 
@@ -215,14 +217,15 @@ func (s *BearPutSpread) ConfirmEntry(ctx context.Context, result *execution.Mult
 	}
 
 	// Calculate actual metrics from fills
+	multiplier := 0.001
 	var netPremium, maxLoss, maxProfit float64
 	if metadata != nil {
 		actualNet := 0.0
 		for _, leg := range legs {
 			if leg.Side == execution.Buy {
-				actualNet -= leg.EntryPrice * float64(leg.Qty)
+				actualNet -= leg.EntryPrice * float64(leg.Qty) * multiplier
 			} else {
-				actualNet += leg.EntryPrice * float64(leg.Qty)
+				actualNet += leg.EntryPrice * float64(leg.Qty) * multiplier
 			}
 		}
 		netPremium = actualNet
@@ -265,15 +268,16 @@ func (s *BearPutSpread) Manage(ctx context.Context, in Input) ([]execution.Order
 		}
 	}
 
+	multiplier := 0.001
 	currentValue := 0.0
 	entryValue := 0.0
 	for _, leg := range pos.Legs {
 		if leg.Side == execution.Buy {
-			currentValue += leg.CurrentPrice * float64(leg.Qty)
-			entryValue -= leg.EntryPrice * float64(leg.Qty)
+			currentValue += leg.CurrentPrice * float64(leg.Qty) * multiplier
+			entryValue -= leg.EntryPrice * float64(leg.Qty) * multiplier
 		} else {
-			currentValue -= leg.CurrentPrice * float64(leg.Qty)
-			entryValue += leg.EntryPrice * float64(leg.Qty)
+			currentValue -= leg.CurrentPrice * float64(leg.Qty) * multiplier
+			entryValue += leg.EntryPrice * float64(leg.Qty) * multiplier
 		}
 	}
 	pos.CurrentPnL = currentValue + entryValue

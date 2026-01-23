@@ -77,8 +77,9 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
 	// BUY orders use BestAsk (price we pay sellers)
+	multiplier := 0.001
 	putPrice := parseFloat(put.Quotes.BestAsk)
-	totalDebit := putPrice * float64(s.PositionSize)
+	totalDebit := putPrice * float64(s.PositionSize) * multiplier
 
 	// Prepare metadata
 	legs := []Leg{
@@ -93,7 +94,7 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	metadata := &StrategyPositionMetadata{
 		NetPremium:   -totalDebit,
 		MaxLoss:      totalDebit,
-		MaxProfit:    parseFloat(put.StrikePrice) * float64(s.PositionSize),
+		MaxProfit:    parseFloat(put.StrikePrice) * float64(s.PositionSize) * multiplier,
 		BreakevenLow: parseFloat(put.StrikePrice) - putPrice,
 		Legs:         legs,
 	}
@@ -156,7 +157,8 @@ func (s *ProtectivePut) ConfirmEntry(ctx context.Context, result *execution.Mult
 		leg.Gamma = metaLeg.Gamma
 	}
 
-	totalPremium := legState.AvgFillPrice * float64(legState.FilledQty)
+	multiplier := 0.001
+	totalPremium := legState.AvgFillPrice * float64(legState.FilledQty) * multiplier
 
 	// NOW set the position with actual fill data (thread-safe)
 	s.SetPosition(&StrategyPosition{
@@ -164,7 +166,7 @@ func (s *ProtectivePut) ConfirmEntry(ctx context.Context, result *execution.Mult
 		EntryTime:    result.CompletedAt,
 		NetPremium:   -totalPremium,
 		MaxLoss:      totalPremium,
-		MaxProfit:    leg.Strike * float64(s.PositionSize),
+		MaxProfit:    leg.Strike * float64(s.PositionSize) * multiplier,
 		BreakevenLow: leg.Strike - legState.AvgFillPrice,
 		Legs:         []Leg{leg},
 	})
@@ -191,7 +193,8 @@ func (s *ProtectivePut) Manage(ctx context.Context, in Input) ([]execution.Order
 	}
 
 	// Calculate P&L
-	currentValue := pos.Legs[0].CurrentPrice * float64(pos.Legs[0].Qty)
+	multiplier := 0.001
+	currentValue := pos.Legs[0].CurrentPrice * float64(pos.Legs[0].Qty) * multiplier
 	paidPremium := -pos.NetPremium
 	pos.CurrentPnL = currentValue - paidPremium
 
