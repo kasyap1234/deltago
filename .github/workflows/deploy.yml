@@ -72,9 +72,9 @@ jobs:
 
               echo 'Building Go binaries...'
               cd \$DEPLOY_DIR/cmd/bot
-              /usr/local/go/bin/go build -o \$DEPLOY_DIR/bot .
+              sudo /usr/local/go/bin/go build -o \$DEPLOY_DIR/bot .
               cd \$DEPLOY_DIR/cmd/adaptive
-              /usr/local/go/bin/go build -o \$DEPLOY_DIR/adaptive .
+              sudo /usr/local/go/bin/go build -o \$DEPLOY_DIR/adaptive .
 
               echo 'Setting up environment...'
               sudo cp /tmp/deltago.env /etc/deltago/env
