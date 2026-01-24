@@ -235,12 +235,24 @@ func (m *DeltaManager) PlaceAndWait(ctx context.Context, req OrderRequest, timeo
 }
 
 // DefaultRetryConfig provides sensible defaults for low-liquidity options
+// Uses Maker mode to prefer limit orders (lower fees), with crossing allowed on final retry
 var DefaultRetryConfig = RetryConfig{
 	MaxRetries:    5,
 	PriceStepPct:  0.05, // 5% per retry
 	RetryInterval: 2 * time.Second,
-	AllowCrossing: true,      // Allow taker on final retry
-	Mode:          ModeTaker, // Default to Taker for Testnet reliability
+	AllowCrossing: true,      // Allow taker limit on final retry
+	Mode:          ModeMaker, // Default to Maker for lower fees
+	AllowMarket:   false,     // Never use market orders in production
+}
+
+// TestnetRetryConfig is for testnet only - allows market orders as fallback for reliability
+var TestnetRetryConfig = RetryConfig{
+	MaxRetries:    3,
+	PriceStepPct:  0.10, // 10% per retry (more aggressive for testnet)
+	RetryInterval: 1 * time.Second,
+	AllowCrossing: true,
+	Mode:          ModeMaker, // Still try maker first
+	AllowMarket:   true,      // Allow market fallback on testnet
 }
 
 // PlaceWithRetry places an order with retry logic and price walking
@@ -309,11 +321,19 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 			}
 		}
 
-		// If mode is Taker, force Market order on first attempt
+		// If mode is Taker, use aggressive limit order (not market) to control slippage
+		// Market orders are dangerous - no price control and higher fees
 		if cfg.Mode == ModeTaker {
-			req.OrderType = Market
-			req.TimeInForce = "gtc" // Market orders usually GTC/IOC
-			req.PostOnly = false
+			// Only use market orders if explicitly allowed (testnet only)
+			if cfg.AllowMarket && attempt == cfg.MaxRetries {
+				req.OrderType = Market
+				req.PostOnly = false
+				req.TimeInForce = "ioc"
+			} else {
+				req.OrderType = Limit    // Still limit for price control
+				req.TimeInForce = "ioc"  // IOC to cross spread immediately
+				req.PostOnly = false     // Allow crossing spread (taker)
+			}
 		}
 
 		var err error

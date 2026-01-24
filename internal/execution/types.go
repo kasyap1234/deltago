@@ -253,6 +253,7 @@ type RetryConfig struct {
 	RetryInterval time.Duration
 	AllowCrossing bool          // Allow crossing spread on final retry
 	Mode          ExecutionMode // maker or taker
+	AllowMarket   bool          // Only for testnet: allow market orders as last resort
 }
 
 // GenerateClientOrderID creates a deterministic order ID (max 32 chars for Delta API)
