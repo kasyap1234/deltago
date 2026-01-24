@@ -49,6 +49,9 @@ func (s *IronCondor) ShouldEnter(ctx context.Context, in Input) (bool, string, e
 	if s.HasPosition() {
 		return false, "already in position", nil
 	}
+	if in.Portfolio != nil && len(in.Portfolio.GetPositions()) > 0 {
+		return false, "existing open positions", nil
+	}
 
 	if in.Regime.Trend != regime.TrendSideways {
 		return false, "not in sideways market", nil
