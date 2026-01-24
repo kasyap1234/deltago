@@ -203,6 +203,7 @@ func (b *AdaptiveBot) runCycle(ctx context.Context) {
 			Portfolio: b.portfolio,
 			Clock:     time.Now(),
 		}
+		b.reconcilePositions(ctx)
 		b.manageExistingPositions(ctx, input)
 		return
 	}
@@ -228,13 +229,11 @@ func (b *AdaptiveBot) runCycle(ctx context.Context) {
 	}
 
 	// 6. Manage existing positions (stop loss, take profit, regime changes)
+	b.reconcilePositions(ctx)
 	b.manageExistingPositions(ctx, input)
 
 	// 7. Check for new entry opportunities
 	b.checkNewEntries(ctx, input)
-
-	// 8. Reconcile positions with exchange
-	b.reconcilePositions(ctx)
 }
 
 func (b *AdaptiveBot) updateRegime(ctx context.Context) error {
@@ -362,6 +361,18 @@ func (b *AdaptiveBot) manageExistingPositions(ctx context.Context, input strateg
 	log.Printf("🔧 Managing %d active strategies", len(activeStrategies))
 
 	for _, strat := range activeStrategies {
+		pos := strat.GetPosition()
+		if pos == nil {
+			continue
+		}
+		if len(b.portfolio.GetPositionsByStrategy(pos.StrategyID)) == 0 {
+			if clearer, ok := strat.(interface{ ClearPosition() }); ok {
+				clearer.ClearPosition()
+			}
+			log.Printf("⚠️ %s: cleared stale position state (no exchange positions)", strat.Name())
+			continue
+		}
+
 		orders, err := strat.Manage(ctx, input)
 		if err != nil {
 			log.Printf("Error managing %s: %v", strat.Name(), err)
