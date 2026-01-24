@@ -77,6 +77,7 @@ func (c *Client) CancelOrder(orderID int64, productID int64) error {
 		if result.Error != nil {
 			return fmt.Errorf("cancel failed: %s (code: %d)", result.Error.Message, result.Error.Code)
 		}
+		return fmt.Errorf("cancel failed: unknown error")
 	}
 
 	return nil

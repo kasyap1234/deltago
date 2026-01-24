@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,14 +17,15 @@ type WebSocketClient struct {
 	auth           *Auth
 	conn           *websocket.Conn
 	done           chan struct{}
+	connDone       chan struct{} // Per-connection done channel to stop goroutines on reconnect
 	reconnect      bool
 	mu             sync.Mutex
 	handlers       map[string][]func(json.RawMessage)
 	isConnected    bool
 	pingTicker     *time.Ticker
-	subscriptions  []subscriptionInfo // Track subscriptions for reconnect
-	closeOnce      sync.Once          // Prevent double-close panic
-	
+	subscriptions  map[string]subscriptionInfo // Track subscriptions for reconnect (deduped)
+	closeOnce      sync.Once                   // Prevent double-close panic
+
 	reconnectMu    sync.Mutex
 	reconnectDelay time.Duration
 	maxReconnect   time.Duration
@@ -56,6 +58,7 @@ func NewWebSocketClient(wsURL string, auth *Auth) *WebSocketClient {
 		done:           make(chan struct{}),
 		reconnect:      true,
 		handlers:       make(map[string][]func(json.RawMessage)),
+		subscriptions:  make(map[string]subscriptionInfo),
 		reconnectDelay: 1 * time.Second,
 		maxReconnect:   60 * time.Second,
 	}
@@ -70,6 +73,11 @@ func (w *WebSocketClient) Connect() error {
 func (w *WebSocketClient) connectInternal(isReconnect bool) error {
 	w.mu.Lock()
 
+	// Stop old goroutines by closing connDone
+	if w.connDone != nil {
+		close(w.connDone)
+	}
+
 	// Stop old ping ticker if reconnecting
 	if w.pingTicker != nil {
 		w.pingTicker.Stop()
@@ -81,6 +89,9 @@ func (w *WebSocketClient) connectInternal(isReconnect bool) error {
 		w.conn.Close()
 		w.conn = nil
 	}
+
+	// Create new per-connection done channel
+	w.connDone = make(chan struct{})
 
 	conn, _, err := websocket.DefaultDialer.Dial(w.url, nil)
 	if err != nil {
@@ -100,10 +111,15 @@ func (w *WebSocketClient) connectInternal(isReconnect bool) error {
 
 	// Start ping ticker to keep connection alive
 	w.pingTicker = time.NewTicker(30 * time.Second)
+
+	// Capture for goroutines
+	connDone := w.connDone
+	currentConn := w.conn
+
 	w.mu.Unlock()
 
-	go w.keepAlive()
-	go w.readMessages()
+	go w.keepAlive(connDone)
+	go w.readMessages(currentConn, connDone)
 
 	// Resubscribe to all channels after reconnect
 	if isReconnect {
@@ -168,8 +184,9 @@ func (w *WebSocketClient) Subscribe(channel string, symbols []string) error {
 		return fmt.Errorf("WebSocket not connected")
 	}
 
-	// Track subscription for reconnect
-	w.subscriptions = append(w.subscriptions, subscriptionInfo{channel: channel, symbols: symbols})
+	// Track subscription for reconnect (deduplicated by key)
+	key := channel + ":" + strings.Join(symbols, ",")
+	w.subscriptions[key] = subscriptionInfo{channel: channel, symbols: symbols}
 
 	msg := map[string]interface{}{
 		"type": "subscribe",
@@ -189,8 +206,10 @@ func (w *WebSocketClient) Subscribe(channel string, symbols []string) error {
 // resubscribeAll re-subscribes to all previously subscribed channels
 func (w *WebSocketClient) resubscribeAll() {
 	w.mu.Lock()
-	subs := make([]subscriptionInfo, len(w.subscriptions))
-	copy(subs, w.subscriptions)
+	subs := make([]subscriptionInfo, 0, len(w.subscriptions))
+	for _, sub := range w.subscriptions {
+		subs = append(subs, sub)
+	}
 	w.mu.Unlock()
 
 	for _, sub := range subs {
@@ -260,7 +279,7 @@ func (w *WebSocketClient) OnTicker(handler func(Ticker)) {
 	})
 }
 
-func (w *WebSocketClient) readMessages() {
+func (w *WebSocketClient) readMessages(conn *websocket.Conn, connDone chan struct{}) {
 	defer func() {
 		w.mu.Lock()
 		w.isConnected = false
@@ -276,8 +295,10 @@ func (w *WebSocketClient) readMessages() {
 		select {
 		case <-w.done:
 			return
+		case <-connDone:
+			return
 		default:
-			_, message, err := w.conn.ReadMessage()
+			_, message, err := conn.ReadMessage()
 			if err != nil {
 				log.Printf("WebSocket read error: %v", err)
 				return
@@ -327,12 +348,14 @@ func (w *WebSocketClient) dispatchHandlers(eventType string, data json.RawMessag
 	handlers := w.handlers[eventType]
 	w.mu.Unlock()
 
+	// Call handlers synchronously to avoid unbounded goroutine creation
+	// Handlers should be fast; long-running operations should spawn their own goroutines
 	for _, handler := range handlers {
-		go handler(data)
+		handler(data)
 	}
 }
 
-func (w *WebSocketClient) keepAlive() {
+func (w *WebSocketClient) keepAlive(connDone chan struct{}) {
 	// Capture ticker locally to avoid nil dereference during reconnect
 	w.mu.Lock()
 	ticker := w.pingTicker
@@ -345,6 +368,9 @@ func (w *WebSocketClient) keepAlive() {
 	for {
 		select {
 		case <-w.done:
+			ticker.Stop()
+			return
+		case <-connDone:
 			ticker.Stop()
 			return
 		case <-ticker.C:
@@ -369,6 +395,11 @@ func (w *WebSocketClient) Close() error {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 
+		if w.connDone != nil {
+			close(w.connDone)
+			w.connDone = nil
+		}
+
 		if w.pingTicker != nil {
 			w.pingTicker.Stop()
 		}
@@ -378,6 +409,21 @@ func (w *WebSocketClient) Close() error {
 		}
 	})
 	return err
+}
+
+// Reset resets the WebSocket client for reuse after Close()
+// Must be called before Connect() if the client was previously closed
+func (w *WebSocketClient) Reset() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.done = make(chan struct{})
+	w.connDone = nil
+	w.reconnect = true
+	w.closeOnce = sync.Once{}
+	w.isConnected = false
+	w.reconnecting = false
+	w.reconnectDelay = 1 * time.Second
 }
 
 // IsConnected returns whether the WebSocket is connected

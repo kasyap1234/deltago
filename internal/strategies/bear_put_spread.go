@@ -251,7 +251,12 @@ func (s *BearPutSpread) Manage(ctx context.Context, in Input) ([]execution.Order
 		return nil, nil
 	}
 
+	s.mu.Lock()
 	pos := s.position
+	if pos == nil {
+		s.mu.Unlock()
+		return nil, nil
+	}
 
 	// Update current prices and calculate P&L
 	for i := range pos.Legs {
@@ -284,14 +289,17 @@ func (s *BearPutSpread) Manage(ctx context.Context, in Input) ([]execution.Order
 
 	// Take profit
 	if pos.CurrentPnL >= pos.MaxProfit*s.TakeProfitPct {
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
 	// Regime reversal - close if trend changes
 	if in.Regime.Trend == regime.TrendUp {
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
+	s.mu.Unlock()
 	return nil, nil
 }
 

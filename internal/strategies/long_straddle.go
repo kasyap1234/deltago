@@ -232,7 +232,12 @@ func (s *LongStraddle) Manage(ctx context.Context, in Input) ([]execution.OrderR
 		return nil, nil
 	}
 
+	s.mu.Lock()
 	pos := s.position
+	if pos == nil {
+		s.mu.Unlock()
+		return nil, nil
+	}
 
 	// Update current prices
 	for i := range pos.Legs {
@@ -257,26 +262,29 @@ func (s *LongStraddle) Manage(ctx context.Context, in Input) ([]execution.OrderR
 
 	// Take profit: 100% gain
 	if pos.CurrentPnL >= totalPaid*s.TakeProfitPct {
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
 	// Stop loss: lose 50% of premium
 	if pos.CurrentPnL <= -totalPaid*s.StopLossMultiplier {
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
 	// Vol expansion achieved - close if IV becomes high
 	if in.Regime.Vol == regime.VolHigh && pos.CurrentPnL > 0 {
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
 	// If trend emerges strongly, let winners run but protect profits
 	if in.Regime.Trend != regime.TrendSideways && pos.CurrentPnL > totalPaid*0.3 {
-		// Close losing leg to lock in profits
-		// For simplicity, close entire position
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
+	s.mu.Unlock()
 	return nil, nil
 }
 

@@ -222,9 +222,11 @@ func TestBearPutSpread_BuildEntryOrders(t *testing.T) {
 		t.Fatal("Metadata type assertion failed")
 	}
 	
-	expectedDebit := 7.2 - 2.0 // 5.2
-	if abs(meta.NetPremium - (-expectedDebit)) > 0.001 {
-		t.Errorf("Expected NetPremium %.2f, got %.2f", -expectedDebit, meta.NetPremium)
+	// Net debit = 7.2 - 2.0 = 5.2, multiplied by 0.001 (BTC options multiplier)
+	multiplier := 0.001
+	expectedDebit := (7.2 - 2.0) * multiplier // 0.0052
+	if abs(meta.NetPremium-(-expectedDebit)) > 0.0001 {
+		t.Errorf("Expected NetPremium %.4f, got %.4f", -expectedDebit, meta.NetPremium)
 	}
 }
 
@@ -237,20 +239,20 @@ func TestBearPutSpread_ConfirmEntry(t *testing.T) {
 		CompletedAt: now,
 		FullyFilled: true,
 		LegResults: map[string]*execution.OrderState{
-			"long_put": {
+			"lp": {
 				Request: execution.OrderRequest{
-					Symbol: "PUT_100",
-					Side:   execution.Buy,
+					Symbol:       "PUT_100",
+					Side:         execution.Buy,
 					InstrumentID: 2002,
 				},
 				Status:       execution.StatusFilled,
 				FilledQty:    1,
 				AvgFillPrice: 7.2,
 			},
-			"short_put": {
+			"sp": {
 				Request: execution.OrderRequest{
-					Symbol: "PUT_90",
-					Side:   execution.Sell,
+					Symbol:       "PUT_90",
+					Side:         execution.Sell,
 					InstrumentID: 2000,
 				},
 				Status:       execution.StatusFilled,
@@ -259,13 +261,13 @@ func TestBearPutSpread_ConfirmEntry(t *testing.T) {
 			},
 		},
 	}
-	
+
 	meta := &StrategyPositionMetadata{
-		MaxLoss: 5.2,
+		MaxLoss:   5.2,
 		MaxProfit: 4.8, // Width 10 - Debit 5.2 = 4.8
 		Legs: []Leg{
-			{ID: "long_put", Strike: 100, OptionType: "put"},
-			{ID: "short_put", Strike: 90, OptionType: "put"},
+			{ID: "lp", Strike: 100, OptionType: "put"},
+			{ID: "sp", Strike: 90, OptionType: "put"},
 		},
 	}
 	
@@ -279,65 +281,68 @@ func TestBearPutSpread_ConfirmEntry(t *testing.T) {
 		t.Fatal("Position not set")
 	}
 	
-	expectedNet := -(7.2 - 2.0)
-	if abs(pos.NetPremium - expectedNet) > 0.001 {
-		t.Errorf("Expected NetPremium %.2f, got %.2f", expectedNet, pos.NetPremium)
+	// Expected net premium = -(7.2 - 2.0) * 0.001 (BTC options multiplier)
+	multiplier := 0.001
+	expectedNet := -(7.2 - 2.0) * multiplier
+	if abs(pos.NetPremium-expectedNet) > 0.0001 {
+		t.Errorf("Expected NetPremium %.4f, got %.4f", expectedNet, pos.NetPremium)
 	}
 }
 
 func TestBearPutSpread_Manage(t *testing.T) {
 	strategy := NewBearPutSpread(nil, 1)
-	
-	strategy.position = &StrategyPosition{
+
+	// Use leg IDs that match the strategy code: "lp" and "sp"
+	// Values need to be in real terms (with multiplier already applied)
+	// Entry: long @ 7.0, short @ 2.0, net debit = 5.0 * 0.001 = 0.005
+	multiplier := 0.001
+	strategy.SetPosition(&StrategyPosition{
 		StrategyID: "test_strat",
-		MaxProfit:  100.0,
-		NetPremium: -50.0,
+		MaxProfit:  5.0 * multiplier,  // 0.005
+		NetPremium: -5.0 * multiplier, // -0.005 (debit)
 		Legs: []Leg{
 			{
-				ID: "long_put", InstrumentID: 2002, Symbol: "PUT_100", Side: execution.Buy, 
+				ID: "lp", InstrumentID: 2002, Symbol: "PUT_100", Side: execution.Buy,
 				Qty: 1, EntryPrice: 7.0,
 			},
 			{
-				ID: "short_put", InstrumentID: 2000, Symbol: "PUT_90", Side: execution.Sell, 
+				ID: "sp", InstrumentID: 2000, Symbol: "PUT_90", Side: execution.Sell,
 				Qty: 1, EntryPrice: 2.0,
 			},
 		},
-	}
-	
+	})
+
 	// Scenario: Market moves down (favorable).
 	// Long Put (100) value increases -> 12.0
 	// Short Put (90) value increases -> 4.0
-	// PnL:
-	// Long: Buy @ 7.0, Sell @ 12.0 -> +5.0
-	// Short: Sell @ 2.0, Buy @ 4.0 -> -2.0
-	// Total PnL: +3.0.
-	
-	// Max Profit logic?
-	strategy.position.MaxProfit = 5.0
-	// Take profit 50% = 2.5.
-	// 3.0 > 2.5 -> Close.
-	
+	// PnL (with multiplier):
+	// Long: (12.0 - 7.0) * 1 * 0.001 = +0.005
+	// Short: (2.0 - 4.0) * 1 * 0.001 = -0.002
+	// Total PnL: 0.003
+	// MaxProfit = 0.005, TakeProfitPct = 0.5, threshold = 0.0025
+	// 0.003 > 0.0025 -> should trigger close
+
 	in := Input{
 		Regime: &regime.Regime{Trend: regime.TrendDown},
 		Snapshot: &MarketSnapshot{
 			Options: []delta.Ticker{
 				{
-					ProductID: 2002, 
-					Quotes: delta.Quotes{BestBid: "12.0", BestAsk: "12.2"}, 
+					ProductID: 2002,
+					Quotes:    delta.Quotes{BestBid: "12.0", BestAsk: "12.2"},
 				},
 				{
 					ProductID: 2000,
-					Quotes: delta.Quotes{BestBid: "4.0", BestAsk: "4.2"}, // Ask used for buy back
+					Quotes:    delta.Quotes{BestBid: "4.0", BestAsk: "4.2"},
 				},
 			},
 		},
 	}
-	
+
 	orders, err := strategy.Manage(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Manage failed: %v", err)
 	}
-	
+
 	if len(orders) != 2 {
 		t.Errorf("Expected 2 closing orders, got %d", len(orders))
 	}

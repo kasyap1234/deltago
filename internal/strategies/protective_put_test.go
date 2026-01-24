@@ -160,28 +160,36 @@ func TestProtectivePut_BuildEntryOrders(t *testing.T) {
 	if !ok {
 		t.Fatal("Metadata type assertion failed")
 	}
-	
-	if math.Abs(meta.NetPremium - (-3.2)) > 0.001 {
-		t.Errorf("Expected NetPremium -3.2, got %.2f", meta.NetPremium)
+
+	// Net premium = -3.2 * 0.001 (BTC options multiplier) = -0.0032
+	multiplier := 0.001
+	expectedDebit := 3.2 * multiplier
+	if math.Abs(meta.NetPremium-(-expectedDebit)) > 0.0001 {
+		t.Errorf("Expected NetPremium %.4f, got %.4f", -expectedDebit, meta.NetPremium)
 	}
 }
 
 func TestProtectivePut_Manage(t *testing.T) {
 	strategy := NewProtectivePut(nil, 1)
-	
-	// Setup position
-	strategy.position = &StrategyPosition{
+
+	// Use leg ID that matches the strategy code: "lp"
+	// All values need to account for the 0.001 multiplier
+	multiplier := 0.001
+	// Net premium = -5.0 * 0.001 = -0.005 (paid 5 in raw terms)
+	strategy.SetPosition(&StrategyPosition{
 		StrategyID: "protect_1",
-		NetPremium: -5.0, // Paid 5
+		NetPremium: -5.0 * multiplier, // -0.005 (debit)
 		Legs: []Leg{
-			{ID: "long_put", Symbol: "PUT_95", Side: execution.Buy, Qty: 1, EntryPrice: 5.0, InstrumentID: 2001},
+			{ID: "lp", Symbol: "PUT_95", Side: execution.Buy, Qty: 1, EntryPrice: 5.0, InstrumentID: 2001},
 		},
-	}
-	
+	})
+
 	// Scenario: Market crashes. Put value 15.0.
-	// PnL: 15 - 5 = 10.
-	// Target Profit: 200% (10.0).
-	// 10 >= 10. Close.
+	// CurrentValue = 15.0 * 0.001 = 0.015
+	// paidPremium = 0.005
+	// PnL = 0.015 - 0.005 = 0.01
+	// Target Profit: 200% (0.005 * 2 = 0.01).
+	// 0.01 >= 0.01. Close.
 	
 	in := Input{
 		Regime: &regime.Regime{Stress: regime.StressCrash},

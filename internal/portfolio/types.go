@@ -106,22 +106,29 @@ func (s *State) RemovePosition(instrumentID int64) {
 	s.recalculateGreeks()
 }
 
-// GetPosition returns a position by ID
+// GetPosition returns a copy of a position by ID
 func (s *State) GetPosition(instrumentID int64) *Position {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.Positions[instrumentID]
+	pos := s.Positions[instrumentID]
+	if pos == nil {
+		return nil
+	}
+	// Return a copy to prevent data races
+	copyPos := *pos
+	return &copyPos
 }
 
-// GetPositions returns all open positions
+// GetPositions returns copies of all open positions
 func (s *State) GetPositions() map[int64]*Position {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Create copy
+	// Create deep copy to prevent data races
 	positions := make(map[int64]*Position)
 	for k, v := range s.Positions {
-		positions[k] = v
+		copyPos := *v
+		positions[k] = &copyPos
 	}
 	return positions
 }
@@ -213,9 +220,15 @@ func (s *State) CalculateStrategyPnL(strategyID string, closeResults map[int64]f
 		}
 	}
 
-	// Clean up entry record
+	// Clean up entry record and instrument mappings
 	s.mu.Lock()
 	delete(s.StrategyEntries, strategyID)
+	// Also clear instrument-to-strategy mappings
+	for instrID, strat := range s.InstrumentToStrategy {
+		if strat == strategyID {
+			delete(s.InstrumentToStrategy, instrID)
+		}
+	}
 	s.mu.Unlock()
 
 	return totalPnL

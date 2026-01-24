@@ -179,7 +179,12 @@ func (s *ProtectivePut) Manage(ctx context.Context, in Input) ([]execution.Order
 		return nil, nil
 	}
 
+	s.mu.Lock()
 	pos := s.position
+	if pos == nil {
+		s.mu.Unlock()
+		return nil, nil
+	}
 
 	// Update current price
 	for i := range pos.Legs {
@@ -200,11 +205,13 @@ func (s *ProtectivePut) Manage(ctx context.Context, in Input) ([]execution.Order
 
 	// Take profit at 200% gain
 	if pos.CurrentPnL >= paidPremium*s.TakeProfitPct {
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
 	// Stop loss at 70% premium decay
 	if pos.CurrentPnL <= -paidPremium*s.StopLossMultiplier {
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
@@ -212,9 +219,11 @@ func (s *ProtectivePut) Manage(ctx context.Context, in Input) ([]execution.Order
 	if in.Regime.Stress == regime.StressNormal &&
 		in.Regime.Trend != regime.TrendDown &&
 		pos.CurrentPnL > 0 {
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
+	s.mu.Unlock()
 	return nil, nil
 }
 

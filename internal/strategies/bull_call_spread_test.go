@@ -219,15 +219,17 @@ func TestBullCallSpread_BuildEntryOrders(t *testing.T) {
 	if order.Metadata == nil {
 		t.Fatal("Metadata is nil")
 	}
-	
+
 	meta, ok := order.Metadata.(*StrategyPositionMetadata)
 	if !ok {
 		t.Fatal("Metadata is not StrategyPositionMetadata")
 	}
 
-	expectedDebit := 6.2 - 2.0 // 4.2
-	if abs(meta.NetPremium - (-expectedDebit)) > 0.001 {
-		t.Errorf("Expected NetPremium %.2f, got %.2f", -expectedDebit, meta.NetPremium)
+	// Net debit = 6.2 - 2.0 = 4.2, multiplied by 0.001 (BTC options multiplier)
+	multiplier := 0.001
+	expectedDebit := (6.2 - 2.0) * multiplier
+	if abs(meta.NetPremium-(-expectedDebit)) > 0.0001 {
+		t.Errorf("Expected NetPremium %.4f, got %.4f", -expectedDebit, meta.NetPremium)
 	}
 }
 
@@ -240,20 +242,20 @@ func TestBullCallSpread_ConfirmEntry(t *testing.T) {
 		CompletedAt: now,
 		FullyFilled: true,
 		LegResults: map[string]*execution.OrderState{
-			"long_call": {
+			"lc": {
 				Request: execution.OrderRequest{
-					Symbol: "CALL_100",
-					Side:   execution.Buy,
+					Symbol:       "CALL_100",
+					Side:         execution.Buy,
 					InstrumentID: 1002,
 				},
 				Status:       execution.StatusFilled,
 				FilledQty:    1,
 				AvgFillPrice: 6.2,
 			},
-			"short_call": {
+			"sc": {
 				Request: execution.OrderRequest{
-					Symbol: "CALL_110",
-					Side:   execution.Sell,
+					Symbol:       "CALL_110",
+					Side:         execution.Sell,
 					InstrumentID: 1004,
 				},
 				Status:       execution.StatusFilled,
@@ -262,103 +264,102 @@ func TestBullCallSpread_ConfirmEntry(t *testing.T) {
 			},
 		},
 	}
-	
+
 	meta := &StrategyPositionMetadata{
-		MaxLoss: 4.2,
+		MaxLoss:   4.2,
 		MaxProfit: 5.8,
 		Legs: []Leg{
-			{ID: "long_call", Strike: 100, OptionType: "call"},
-			{ID: "short_call", Strike: 110, OptionType: "call"},
+			{ID: "lc", Strike: 100, OptionType: "call"},
+			{ID: "sc", Strike: 110, OptionType: "call"},
 		},
 	}
-	
+
 	err := strategy.ConfirmEntry(context.Background(), result, meta)
 	if err != nil {
 		t.Fatalf("ConfirmEntry failed: %v", err)
 	}
-	
+
 	pos := strategy.GetPosition()
 	if pos == nil {
 		t.Fatal("Position not set")
 	}
-	
+
 	if len(pos.Legs) != 2 {
 		t.Errorf("Expected 2 legs in position, got %d", len(pos.Legs))
 	}
-	
-	expectedNet := -(6.2 - 2.0) // -4.2
-	if abs(pos.NetPremium - expectedNet) > 0.001 {
-		t.Errorf("Expected NetPremium %.2f, got %.2f", expectedNet, pos.NetPremium)
+
+	// Expected net premium = -(6.2 - 2.0) * 0.001 (BTC options multiplier)
+	multiplier := 0.001
+	expectedNet := -(6.2 - 2.0) * multiplier
+	if abs(pos.NetPremium-expectedNet) > 0.0001 {
+		t.Errorf("Expected NetPremium %.4f, got %.4f", expectedNet, pos.NetPremium)
 	}
 }
 
 func TestBullCallSpread_Manage_TakeProfit(t *testing.T) {
 	strategy := NewBullCallSpread(nil, 1)
-	
-	// Setup position
-	strategy.position = &StrategyPosition{
+
+	// Use leg IDs that match the strategy code: "lc" and "sc"
+	// All values need to account for the 0.001 multiplier
+	multiplier := 0.001
+	// Entry: long @ 6.0, short @ 2.0, net debit = 4.0 * 0.001 = 0.004
+	// Max Profit = (10-100 spread width - 4.0 debit) * 0.001 = 6.0 * 0.001 = 0.006
+	strategy.SetPosition(&StrategyPosition{
 		StrategyID: "test_strat",
-		MaxProfit:  100.0,
-		NetPremium: -50.0,
+		MaxProfit:  6.0 * multiplier,  // 0.006
+		NetPremium: -4.0 * multiplier, // -0.004 (debit)
 		Legs: []Leg{
 			{
-				ID: "long_call", InstrumentID: 1002, Symbol: "CALL_100", Side: execution.Buy, 
+				ID: "lc", InstrumentID: 1002, Symbol: "CALL_100", Side: execution.Buy,
 				Qty: 1, EntryPrice: 6.0,
 			},
 			{
-				ID: "short_call", InstrumentID: 1004, Symbol: "CALL_110", Side: execution.Sell, 
+				ID: "sc", InstrumentID: 1004, Symbol: "CALL_110", Side: execution.Sell,
 				Qty: 1, EntryPrice: 2.0,
 			},
 		},
-	}
-	
+	})
+
 	// Scenario: Prices moved favorably
 	// Long Call now worth 10.0 (Gain 4.0)
 	// Short Call now worth 3.0 (Loss 1.0)
-	// Net PnL = (10 - 6) + (2 - 3) = 4 - 1 = 3.0
-	// Wait, MaxProfit is 100? Let's use realistic numbers matching MaxProfit logic.
-	// If strikes are 100/110, width is 10. Net debit 4. Max Profit = 6.
-	// Take profit is 50% of MaxProfit = 3.
-	// So if current PnL >= 3, close.
-	
-	strategy.position.MaxProfit = 6.0
-	
+	// PnL (with multiplier):
+	// Long: (10.0 - 6.0) * 1 * 0.001 = +0.004
+	// Short: (2.0 - 3.2) * 1 * 0.001 = -0.0012
+	// Total PnL: 0.0028
+	// TakeProfit threshold = MaxProfit * 0.5 = 0.003
+	// 0.0028 < 0.003 -> should NOT close
+
 	in := Input{
 		Regime: &regime.Regime{Trend: regime.TrendUp},
 		Snapshot: &MarketSnapshot{
 			Options: []delta.Ticker{
 				{
-					ProductID: 1002, 
-					Quotes: delta.Quotes{BestBid: "10.0", BestAsk: "10.2"}, // Bid used for selling long
+					ProductID: 1002,
+					Quotes:    delta.Quotes{BestBid: "10.0", BestAsk: "10.2"},
 				},
 				{
 					ProductID: 1004,
-					Quotes: delta.Quotes{BestBid: "3.0", BestAsk: "3.2"}, // Ask used for buying back short
+					Quotes:    delta.Quotes{BestBid: "3.0", BestAsk: "3.2"},
 				},
 			},
 		},
 	}
-	
-	// Current Value calculation in Manage:
-	// Long (Buy): Sell at Bid (10.0). Entry 6.0. PnL = 4.0
-	// Short (Sell): Buy at Ask (3.2). Entry 2.0. PnL = 2.0 - 3.2 = -1.2
-	// Total PnL = 2.8.
-	// Target 3.0. Should not close yet.
-	
+
 	orders, err := strategy.Manage(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Manage failed: %v", err)
 	}
 	if orders != nil {
-		t.Errorf("Expected nil orders (PnL 2.8 < 3.0), got %d orders", len(orders))
+		t.Errorf("Expected nil orders (PnL below threshold), got %d orders", len(orders))
 	}
-	
-	// Now increase profit
+
+	// Now increase profit to trigger take-profit
 	// Long worth 10.5
+	// PnL = (10.5 - 6.0) * 0.001 + (2.0 - 3.2) * 0.001 = 0.0045 - 0.0012 = 0.0033
+	// 0.0033 > 0.003 -> should close
 	in.Snapshot.Options[0].Quotes.BestBid = "10.5"
-	// PnL = (10.5 - 6.0) + (2.0 - 3.2) = 4.5 - 1.2 = 3.3.
-	// 3.3 > 3.0. Should close.
-	
+
 	orders, err = strategy.Manage(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Manage failed: %v", err)

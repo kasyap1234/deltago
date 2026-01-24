@@ -219,127 +219,124 @@ func TestIronCondor_BuildEntryOrders(t *testing.T) {
 	if !ok {
 		t.Fatal("Metadata type assertion failed")
 	}
-	
-	if math.Abs(meta.NetPremium - 1.6) > 0.001 {
-		t.Errorf("Expected NetPremium 1.6, got %.2f", meta.NetPremium)
+
+	// Credit = (4.0 + 4.0) - (3.2 + 3.2) = 1.6, multiplied by 0.001 (BTC options multiplier)
+	multiplier := 0.001
+	expectedCredit := 1.6 * multiplier
+	if math.Abs(meta.NetPremium-expectedCredit) > 0.0001 {
+		t.Errorf("Expected NetPremium %.4f, got %.4f", expectedCredit, meta.NetPremium)
 	}
 }
 
 func TestIronCondor_ConfirmEntry(t *testing.T) {
 	strategy := NewIronCondor(nil, 1, 0.25, 1)
 	now := time.Now()
-	
+
+	// Use leg IDs that match the strategy code: "sc", "sp", "lc", "lp"
 	result := &execution.MultiLegResult{
 		StrategyID:  "condor_1",
 		CompletedAt: now,
 		FullyFilled: true,
 		LegResults: map[string]*execution.OrderState{
-			"short_call": {
+			"sc": {
 				Request: execution.OrderRequest{Symbol: "CALL_110", Side: execution.Sell, InstrumentID: 100},
-				Status: execution.StatusFilled, FilledQty: 1, AvgFillPrice: 4.0,
+				Status:  execution.StatusFilled, FilledQty: 1, AvgFillPrice: 4.0,
 			},
-			"short_put": {
+			"sp": {
 				Request: execution.OrderRequest{Symbol: "PUT_90", Side: execution.Sell, InstrumentID: 101},
-				Status: execution.StatusFilled, FilledQty: 1, AvgFillPrice: 4.0,
+				Status:  execution.StatusFilled, FilledQty: 1, AvgFillPrice: 4.0,
 			},
-			"long_call": {
+			"lc": {
 				Request: execution.OrderRequest{Symbol: "CALL_115", Side: execution.Buy, InstrumentID: 102},
-				Status: execution.StatusFilled, FilledQty: 1, AvgFillPrice: 3.2,
+				Status:  execution.StatusFilled, FilledQty: 1, AvgFillPrice: 3.2,
 			},
-			"long_put": {
+			"lp": {
 				Request: execution.OrderRequest{Symbol: "PUT_85", Side: execution.Buy, InstrumentID: 103},
-				Status: execution.StatusFilled, FilledQty: 1, AvgFillPrice: 3.2,
+				Status:  execution.StatusFilled, FilledQty: 1, AvgFillPrice: 3.2,
 			},
 		},
 	}
-	
+
 	meta := &StrategyPositionMetadata{
-		MaxLoss: 8.4,
+		MaxLoss:   8.4,
 		MaxProfit: 1.6,
 		Legs: []Leg{
-			{ID: "short_call", Strike: 110},
-			{ID: "short_put", Strike: 90},
-			{ID: "long_call", Strike: 115},
-			{ID: "long_put", Strike: 85},
+			{ID: "sc", Strike: 110},
+			{ID: "sp", Strike: 90},
+			{ID: "lc", Strike: 115},
+			{ID: "lp", Strike: 85},
 		},
 	}
-	
+
 	err := strategy.ConfirmEntry(context.Background(), result, meta)
 	if err != nil {
 		t.Fatalf("ConfirmEntry failed: %v", err)
 	}
-	
+
 	pos := strategy.GetPosition()
 	if pos == nil {
 		t.Fatal("Position not set")
 	}
-	
+
 	if len(pos.Legs) != 4 {
 		t.Errorf("Expected 4 legs, got %d", len(pos.Legs))
 	}
-	
-	// Verify Net Premium: (4+4) - (3.2+3.2) = 1.6
-	if math.Abs(pos.NetPremium - 1.6) > 0.001 {
-		t.Errorf("Expected NetPremium 1.6, got %.2f", pos.NetPremium)
+
+	// Verify Net Premium: (4+4) - (3.2+3.2) = 1.6, multiplied by 0.001 (BTC options multiplier)
+	multiplier := 0.001
+	expectedCredit := 1.6 * multiplier
+	if math.Abs(pos.NetPremium-expectedCredit) > 0.0001 {
+		t.Errorf("Expected NetPremium %.4f, got %.4f", expectedCredit, pos.NetPremium)
 	}
 }
 
 func TestIronCondor_Manage(t *testing.T) {
 	strategy := NewIronCondor(nil, 1, 0.25, 1)
-	
-	// Setup position
-	strategy.position = &StrategyPosition{
+
+	// Use leg IDs that match the strategy code: "sc", "sp", "lc", "lp"
+	// All values need to account for the 0.001 multiplier
+	multiplier := 0.001
+	// Net premium = 1.6 * 0.001 = 0.0016
+	strategy.SetPosition(&StrategyPosition{
 		StrategyID: "condor_1",
-		MaxProfit:  1.6,
-		NetPremium: 1.6,
+		MaxProfit:  1.6 * multiplier,  // 0.0016
+		NetPremium: 1.6 * multiplier,  // 0.0016 (credit)
 		Legs: []Leg{
-			{ID: "short_call", Symbol: "CALL_110", Side: execution.Sell, Qty: 1, EntryPrice: 4.0, Strike: 110},
-			{ID: "short_put", Symbol: "PUT_90", Side: execution.Sell, Qty: 1, EntryPrice: 4.0, Strike: 90},
-			{ID: "long_call", Symbol: "CALL_115", Side: execution.Buy, Qty: 1, EntryPrice: 3.2, Strike: 115},
-			{ID: "long_put", Symbol: "PUT_85", Side: execution.Buy, Qty: 1, EntryPrice: 3.2, Strike: 85},
+			{ID: "sc", Symbol: "CALL_110", Side: execution.Sell, Qty: 1, EntryPrice: 4.0, Strike: 110, InstrumentID: 100},
+			{ID: "sp", Symbol: "PUT_90", Side: execution.Sell, Qty: 1, EntryPrice: 4.0, Strike: 90, InstrumentID: 101},
+			{ID: "lc", Symbol: "CALL_115", Side: execution.Buy, Qty: 1, EntryPrice: 3.2, Strike: 115, InstrumentID: 102},
+			{ID: "lp", Symbol: "PUT_85", Side: execution.Buy, Qty: 1, EntryPrice: 3.2, Strike: 85, InstrumentID: 103},
 		},
-	}
-	
+	})
+
 	// Scenario: Market stays flat, volatility drops (Perfect).
 	// Short Call Value drops to 1.0 (Ask to buy back)
 	// Short Put Value drops to 1.0
 	// Long Call Value drops to 0.5 (Bid to sell)
 	// Long Put Value drops to 0.5
-	
-	// Cost to close:
-	// Buy Shorts: 1.0 + 1.0 = 2.0
-	// Sell Longs: 0.5 + 0.5 = 1.0
-	// Net Cost: 1.0.
-	// PnL = NetPremium (1.6) - NetCost (1.0) = 0.6.
-	
-	// Target Profit 50% of 1.6 = 0.8.
-	// 0.6 < 0.8. Hold.
-	
+	//
+	// Cost to close (with multiplier):
+	// Buy Shorts: (1.0 + 1.0) * 0.001 = 0.002
+	// Sell Longs: (0.5 + 0.5) * 0.001 = 0.001
+	// Net Cost to close: 0.001.
+	// PnL = NetPremium (0.0016) - NetCost (0.001) = 0.0006.
+	//
+	// Target Profit 50% of 0.0016 = 0.0008.
+	// 0.0006 < 0.0008. Hold.
+
 	in := Input{
 		Regime: &regime.Regime{Trend: regime.TrendSideways, Stress: regime.StressNormal},
 		Snapshot: &MarketSnapshot{
 			SpotPrice: 100.0,
 			Options: []delta.Ticker{
-				{ProductID: 0, Symbol: "CALL_110", Quotes: delta.Quotes{BestAsk: "1.0"}},
-				{ProductID: 0, Symbol: "PUT_90", Quotes: delta.Quotes{BestAsk: "1.0"}},
-				{ProductID: 0, Symbol: "CALL_115", Quotes: delta.Quotes{BestBid: "0.5"}},
-				{ProductID: 0, Symbol: "PUT_85", Quotes: delta.Quotes{BestBid: "0.5"}},
+				{ProductID: 100, Symbol: "CALL_110", Quotes: delta.Quotes{BestAsk: "1.0"}},
+				{ProductID: 101, Symbol: "PUT_90", Quotes: delta.Quotes{BestAsk: "1.0"}},
+				{ProductID: 102, Symbol: "CALL_115", Quotes: delta.Quotes{BestBid: "0.5"}},
+				{ProductID: 103, Symbol: "PUT_85", Quotes: delta.Quotes{BestBid: "0.5"}},
 			},
 		},
 	}
-	// Need to match ProductIDs to Position Leg InstrumentIDs (0 is generic, need real ones if loop checks)
-	// Test uses loop over options to find match.
-	// Fix InstrumentIDs
-	strategy.position.Legs[0].InstrumentID = 100
-	strategy.position.Legs[1].InstrumentID = 101
-	strategy.position.Legs[2].InstrumentID = 102
-	strategy.position.Legs[3].InstrumentID = 103
-	
-	in.Snapshot.Options[0].ProductID = 100
-	in.Snapshot.Options[1].ProductID = 101
-	in.Snapshot.Options[2].ProductID = 102
-	in.Snapshot.Options[3].ProductID = 103
-	
+
 	orders, err := strategy.Manage(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Manage failed: %v", err)
@@ -347,18 +344,18 @@ func TestIronCondor_Manage(t *testing.T) {
 	if orders != nil {
 		t.Errorf("Expected hold, got orders")
 	}
-	
+
 	// Decrease value more -> Profit hit
-	// Shorts -> 0.1
-	// Longs -> 0.05
-	// Cost: 0.2 - 0.1 = 0.1.
-	// PnL: 1.6 - 0.1 = 1.5. > 0.8. Close.
-	
+	// Shorts -> 0.1 each
+	// Longs -> 0.05 each
+	// Cost to close: (0.1 + 0.1 - 0.05 - 0.05) * 0.001 = 0.0001.
+	// PnL: 0.0016 - 0.0001 = 0.0015. > 0.0008. Close.
+
 	in.Snapshot.Options[0].Quotes.BestAsk = "0.1"
 	in.Snapshot.Options[1].Quotes.BestAsk = "0.1"
 	in.Snapshot.Options[2].Quotes.BestBid = "0.05"
 	in.Snapshot.Options[3].Quotes.BestBid = "0.05"
-	
+
 	orders, err = strategy.Manage(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Manage failed: %v", err)
@@ -366,9 +363,8 @@ func TestIronCondor_Manage(t *testing.T) {
 	if len(orders) != 4 {
 		t.Errorf("Expected 4 close orders, got %d", len(orders))
 	}
-	
+
 	// Verify Close Sequence: Buy Shorts First, Sell Longs Last
-	// Note: buildCloseOrderRequests returns shorts (Buy) first, then longs (Sell).
 	if orders[0].Side != execution.Buy || orders[1].Side != execution.Buy {
 		t.Error("First close orders must be Buys (covering shorts)")
 	}

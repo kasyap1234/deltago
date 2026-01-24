@@ -368,7 +368,12 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 		return nil, nil
 	}
 
+	s.mu.Lock()
 	pos := s.position
+	if pos == nil {
+		s.mu.Unlock()
+		return nil, nil
+	}
 
 	// Update current prices
 	for i := range pos.Legs {
@@ -404,6 +409,7 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 	// Take profit: close at 50% of max profit
 	if pos.CurrentPnL >= pos.MaxProfit*s.TakeProfitPct {
 		log.Printf("📥 Iron Condor: Take Profit triggered (PnL=%.2f, target=%.2f)", pos.CurrentPnL, pos.MaxProfit*s.TakeProfitPct)
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
@@ -411,12 +417,14 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 	stopLossLevel := -pos.NetPremium * s.StopLossMultiplier
 	if pos.CurrentPnL <= stopLossLevel {
 		log.Printf("📥 Iron Condor: Stop Loss triggered (PnL=%.2f, limit=%.2f)", pos.CurrentPnL, stopLossLevel)
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
 	// Regime change: close if trend emerges or crash
 	if in.Regime.Trend != regime.TrendSideways || in.Regime.Stress == regime.StressCrash {
 		log.Printf("📥 Iron Condor: Regime change exit (Trend=%s, Stress=%s)", in.Regime.Trend, in.Regime.Stress)
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
@@ -430,11 +438,13 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 				// Price approaching short strike - close early
 				log.Printf("📥 Iron Condor: Early exit due to strike breach (Spot=%.2f, Strike=%.2f, Buffer=%.2f)",
 					spot, leg.Strike, threshold)
+				s.mu.Unlock()
 				return s.buildCloseOrderRequests(in)
 			}
 		}
 	}
 
+	s.mu.Unlock()
 	return nil, nil
 }
 

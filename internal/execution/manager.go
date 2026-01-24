@@ -43,11 +43,15 @@ func (m *DeltaManager) Place(ctx context.Context, req OrderRequest) (*OrderAck, 
 		Size:          req.Qty,
 		Side:          delta.OrderSide(req.Side),
 		OrderType:     delta.OrderType(req.OrderType),
-		LimitPrice:    fmt.Sprintf("%.2f", req.Price),
 		TimeInForce:   tif,
 		PostOnly:      req.PostOnly,
 		ReduceOnly:    req.ReduceOnly,
 		ClientOrderID: req.ClientOrderID,
+	}
+
+	// Only set limit price for limit orders
+	if req.OrderType == Limit {
+		orderReq.LimitPrice = fmt.Sprintf("%.2f", req.Price)
 	}
 
 	order, err := m.client.PlaceOrder(orderReq)
@@ -389,7 +393,12 @@ func mapOrderState(state string) OrderStatus {
 		return StatusFilled
 	case "cancelled":
 		return StatusCancelled
+	case "rejected":
+		return StatusRejected
+	case "partially_filled":
+		return StatusPartial
 	default:
+		log.Printf("Warning: unknown order state: %s, treating as pending", state)
 		return StatusPending
 	}
 }

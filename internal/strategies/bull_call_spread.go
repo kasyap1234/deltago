@@ -262,7 +262,12 @@ func (s *BullCallSpread) Manage(ctx context.Context, in Input) ([]execution.Orde
 		return nil, nil
 	}
 
+	s.mu.Lock()
 	pos := s.position
+	if pos == nil {
+		s.mu.Unlock()
+		return nil, nil
+	}
 
 	// Update current prices
 	for i := range pos.Legs {
@@ -303,15 +308,17 @@ func (s *BullCallSpread) Manage(ctx context.Context, in Input) ([]execution.Orde
 
 	// Take profit check
 	if pos.CurrentPnL >= pos.MaxProfit*s.TakeProfitPct {
-		// Close position for profit
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
 	// Regime change check - close if trend reverses
 	if in.Regime.Trend == regime.TrendDown || in.Regime.Stress == regime.StressCrash {
+		s.mu.Unlock()
 		return s.buildCloseOrderRequests(in)
 	}
 
+	s.mu.Unlock()
 	return nil, nil
 }
 

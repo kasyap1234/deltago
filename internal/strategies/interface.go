@@ -152,7 +152,9 @@ func (b *BaseStrategy) ClearPosition() {
 }
 
 func (b *BaseStrategy) OnFill(ctx context.Context, fill execution.Fill) error {
-	// Update position state from fill
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if b.position == nil {
 		return nil
 	}

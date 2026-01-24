@@ -38,8 +38,11 @@ func TestCalculateStrategyPnL(t *testing.T) {
 	
 	pnl := s.CalculateStrategyPnL(strategyID, closeResults)
 	
-	if pnl != 90.0 {
-		t.Errorf("Expected PnL 90.0, got %.2f", pnl)
+	// Expected PnL = 90.0 * 0.001 (BTC options multiplier) = 0.09
+	multiplier := 0.001
+	expectedPnL := 90.0 * multiplier
+	if abs(pnl-expectedPnL) > 0.0001 {
+		t.Errorf("Expected PnL %.4f, got %.4f", expectedPnL, pnl)
 	}
 	
 	// Check if entry records were cleaned up

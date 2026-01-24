@@ -63,6 +63,9 @@ func (m *Manager) Start() error {
 	m.stopOnce = sync.Once{}         // Reset once for restart
 	m.mu.Unlock()
 
+	// Reset WebSocket client if it was previously closed
+	m.wsClient.Reset()
+
 	// Connect WebSocket for real-time updates
 	if err := m.wsClient.Connect(); err != nil {
 		log.Printf("Warning: WebSocket connection failed, falling back to polling: %v", err)

@@ -173,30 +173,37 @@ func TestLongStraddle_BuildEntryOrders(t *testing.T) {
 	if !ok {
 		t.Fatal("Metadata type assertion failed")
 	}
-	
-	// Total debit: 5.2 + 5.2 = 10.4
-	if math.Abs(meta.NetPremium - (-10.4)) > 0.001 {
-		t.Errorf("Expected NetPremium -10.4, got %.2f", meta.NetPremium)
+
+	// Total debit: (5.2 + 5.2) * 0.001 (BTC options multiplier) = 0.0104
+	multiplier := 0.001
+	expectedDebit := 10.4 * multiplier
+	if math.Abs(meta.NetPremium-(-expectedDebit)) > 0.0001 {
+		t.Errorf("Expected NetPremium %.4f, got %.4f", -expectedDebit, meta.NetPremium)
 	}
 }
 
 func TestLongStraddle_Manage(t *testing.T) {
 	strategy := NewLongStraddle(nil, 1)
-	
-	// Setup position
-	strategy.position = &StrategyPosition{
+
+	// Use leg IDs that match the strategy code: "lc" and "lp"
+	// All values need to account for the 0.001 multiplier
+	multiplier := 0.001
+	// Net premium = -10.0 * 0.001 = -0.01 (paid 10 in raw terms)
+	strategy.SetPosition(&StrategyPosition{
 		StrategyID: "straddle_1",
-		NetPremium: -10.0, // Paid 10
+		NetPremium: -10.0 * multiplier, // -0.01 (debit)
 		Legs: []Leg{
-			{ID: "long_call", Symbol: "CALL_100", Side: execution.Buy, Qty: 1, EntryPrice: 5.0, InstrumentID: 100},
-			{ID: "long_put", Symbol: "PUT_100", Side: execution.Buy, Qty: 1, EntryPrice: 5.0, InstrumentID: 101},
+			{ID: "lc", Symbol: "CALL_100", Side: execution.Buy, Qty: 1, EntryPrice: 5.0, InstrumentID: 100},
+			{ID: "lp", Symbol: "PUT_100", Side: execution.Buy, Qty: 1, EntryPrice: 5.0, InstrumentID: 101},
 		},
-	}
-	
-	// Scenario 1: Price unchange, Vol increases (Good). Value 12.0.
-	// Profit 2.0. < Target (10.0). Hold.
-	// But check logic: "Vol expansion achieved - close if IV becomes high"
-	
+	})
+
+	// Scenario 1: Price unchanged, Vol increases (Good). Value 12.0.
+	// CurrentValue = (6+6) * 0.001 = 0.012
+	// totalPaid = 0.01
+	// PnL = 0.012 - 0.01 = 0.002 > 0.
+	// VolHigh -> Close (rule: close if IV high and PnL > 0).
+
 	in := Input{
 		Regime: &regime.Regime{Trend: regime.TrendSideways, Vol: regime.VolHigh},
 		Snapshot: &MarketSnapshot{
@@ -207,10 +214,7 @@ func TestLongStraddle_Manage(t *testing.T) {
 			},
 		},
 	}
-	
-	// PnL = (6+6) - 10 = 2.0. > 0.
-	// VolHigh -> Close.
-	
+
 	orders, err := strategy.Manage(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Manage failed: %v", err)
@@ -218,22 +222,19 @@ func TestLongStraddle_Manage(t *testing.T) {
 	if len(orders) != 2 {
 		t.Errorf("Expected 2 close orders (VolHigh), got %d", len(orders))
 	}
-	
+
 	// Scenario 2: Vol Low, Price moves significantly.
 	// Call -> 15. Put -> 1.
-	// Value 16. PnL 6.
-	// Trend Emerging?
-	
+	// CurrentValue = 16 * 0.001 = 0.016
+	// PnL = 0.016 - 0.01 = 0.006.
+	// Trend emerging logic: if trend != Sideways and PnL > totalPaid * 0.3 = 0.003.
+	// 0.006 > 0.003. Close.
+
 	in.Regime.Vol = regime.VolLow
 	in.Regime.Trend = regime.TrendUp
 	in.Snapshot.Options[0].Quotes.BestBid = "15.0"
 	in.Snapshot.Options[1].Quotes.BestBid = "1.0"
-	
-	// PnL = 16 - 10 = 6.0.
-	// Target Profit: 10.0 (100%).
-	// Trend emerging logic: if trend != Sideways and PnL > 3.0 (30%).
-	// 6.0 > 3.0. Close.
-	
+
 	orders, err = strategy.Manage(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Manage failed: %v", err)
