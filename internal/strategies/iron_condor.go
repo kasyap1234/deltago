@@ -127,10 +127,25 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 	// Calculate prices
 	// SELL orders use BestBid (price buyers will pay us)
 	// BUY orders use BestAsk (price we pay sellers)
-	shortCallPrice := parseFloat(shortCall.Quotes.BestBid)
-	shortPutPrice := parseFloat(shortPut.Quotes.BestBid)
-	longCallPrice := parseFloat(longCall.Quotes.BestAsk)
-	longPutPrice := parseFloat(longPut.Quotes.BestAsk)
+	shortCallPrice, err := parseFloatRequired(shortCall.Quotes.BestBid, "short_call_best_bid")
+	if err != nil {
+		return nil, err
+	}
+	shortPutPrice, err := parseFloatRequired(shortPut.Quotes.BestBid, "short_put_best_bid")
+	if err != nil {
+		return nil, err
+	}
+	longCallPrice, err := parseFloatRequired(longCall.Quotes.BestAsk, "long_call_best_ask")
+	if err != nil {
+		return nil, err
+	}
+	longPutPrice, err := parseFloatRequired(longPut.Quotes.BestAsk, "long_put_best_ask")
+	if err != nil {
+		return nil, err
+	}
+	if shortCallPrice <= 0 || shortPutPrice <= 0 || longCallPrice <= 0 || longPutPrice <= 0 {
+		return nil, fmt.Errorf("invalid pricing for condor: sc=%.4f sp=%.4f lc=%.4f lp=%.4f", shortCallPrice, shortPutPrice, longCallPrice, longPutPrice)
+	}
 
 	// Net credit = premium received - premium paid
 	multiplier := 0.001

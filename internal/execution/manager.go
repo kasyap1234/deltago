@@ -391,6 +391,8 @@ func mapOrderState(state string) OrderStatus {
 		return StatusPending
 	case "filled":
 		return StatusFilled
+	case "closed":
+		return StatusFilled
 	case "cancelled":
 		return StatusCancelled
 	case "rejected":
