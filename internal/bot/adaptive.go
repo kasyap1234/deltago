@@ -359,6 +359,7 @@ func (b *AdaptiveBot) convertCandles(candles []delta.OHLCCandle) []regime.OHLCV 
 
 func (b *AdaptiveBot) manageExistingPositions(ctx context.Context, input strategies.Input) {
 	activeStrategies := b.selector.GetActiveStrategies()
+	log.Printf("🔧 Managing %d active strategies", len(activeStrategies))
 
 	for _, strat := range activeStrategies {
 		orders, err := strat.Manage(ctx, input)
@@ -366,6 +367,8 @@ func (b *AdaptiveBot) manageExistingPositions(ctx context.Context, input strateg
 			log.Printf("Error managing %s: %v", strat.Name(), err)
 			continue
 		}
+
+		log.Printf("🔧 %s Manage returned %d orders", strat.Name(), len(orders))
 
 		if len(orders) > 0 {
 			log.Printf("📤 %s: executing %d management orders", strat.Name(), len(orders))

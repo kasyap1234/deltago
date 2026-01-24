@@ -457,6 +457,8 @@ func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest
 		return nil, fmt.Errorf("no position to close")
 	}
 
+	log.Printf("📦 Iron Condor buildCloseOrderRequests: legs=%d", len(s.position.Legs))
+
 	var orders []execution.OrderRequest
 	now := time.Now()
 
@@ -530,6 +532,8 @@ func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest
 	// Return shorts first, then longs
 	orders = append(orders, shortOrders...)
 	orders = append(orders, longOrders...)
+
+	log.Printf("📦 Iron Condor close orders built: shorts=%d longs=%d total=%d", len(shortOrders), len(longOrders), len(orders))
 
 	return orders, nil
 }
