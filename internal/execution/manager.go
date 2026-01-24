@@ -315,6 +315,7 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 			// On final retry, allow crossing spread to guarantee fill
 			// This pays taker fee but ensures execution
 			if attempt == cfg.MaxRetries && cfg.AllowCrossing {
+				log.Printf("DEBUG [Execution]: Final retry - switching to Taker/IOC mode to guarantee fill for %s", req.Symbol)
 				req.PostOnly = false
 				req.TimeInForce = "ioc"
 			}

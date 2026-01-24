@@ -105,6 +105,11 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 	shortPrice := parseFloat(shortCall.Quotes.BestBid)
 	netDebit := longPrice - shortPrice
 
+	// Price sanity check: long leg MUST be more expensive than short leg for a debit spread
+	if longPrice <= shortPrice {
+		return nil, fmt.Errorf("inverted spread: long=%.2f <= short=%.2f", longPrice, shortPrice)
+	}
+
 	// Check if debit is positive
 	if netDebit <= 0 {
 		return nil, fmt.Errorf("negative net debit: %.2f", netDebit)

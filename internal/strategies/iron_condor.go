@@ -162,6 +162,16 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 	// Check if credit covers transaction costs (require 2x costs)
 	// Use gross premium (sum of absolute leg values) for cost estimation, not net credit
 	grossPremium := (shortCallPrice + shortPutPrice + longCallPrice + longPutPrice) * float64(s.PositionSize) * multiplier
+
+	// Price sanity checks: short legs MUST be more expensive than long legs
+	// If the book is inverted (Testnet), we should NOT enter
+	if shortCallPrice <= longCallPrice {
+		return nil, fmt.Errorf("inverted call book: short_call=%.2f <= long_call=%.2f", shortCallPrice, longCallPrice)
+	}
+	if shortPutPrice <= longPutPrice {
+		return nil, fmt.Errorf("inverted put book: short_put=%.2f <= long_put=%.2f", shortPutPrice, longPutPrice)
+	}
+
 	costs := in.Portfolio.Costs.EstimateCost(grossPremium, true, 4) // 4 legs, maker (PostOnly)
 	if netCredit < costs*2 {
 		return nil, fmt.Errorf("insufficient edge after costs: credit=%.2f costs=%.2f", netCredit, costs)

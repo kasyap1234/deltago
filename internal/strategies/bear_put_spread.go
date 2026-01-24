@@ -101,6 +101,11 @@ func (s *BearPutSpread) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	shortPrice := parseFloat(shortPut.Quotes.BestBid)
 	netDebit := longPrice - shortPrice
 
+	// Price sanity check: long leg MUST be more expensive than short leg for a debit spread
+	if longPrice <= shortPrice {
+		return nil, fmt.Errorf("inverted spread: long=%.2f <= short=%.2f", longPrice, shortPrice)
+	}
+
 	if netDebit <= 0 {
 		return nil, fmt.Errorf("negative net debit: %.2f", netDebit)
 	}

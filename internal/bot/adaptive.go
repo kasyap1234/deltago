@@ -493,10 +493,12 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 			continue
 		}
 
-		if result.FullyFilled {
-			// Record entry prices for P&L calculation
+		// Always record entries that DID fill, even if not fully filled (to avoid orphaned untracked positions)
+		if len(result.LegResults) > 0 {
 			b.recordStrategyEntry(result)
+		}
 
+		if result.FullyFilled {
 			// Confirm the position
 			var meta *strategies.StrategyPositionMetadata
 			if multiLeg.Metadata != nil {
@@ -531,7 +533,8 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 				}
 			}
 		} else {
-			log.Printf("   ⚠️ Partial fill or failed: %v", result.Error)
+			log.Printf("   ⚠️ Entry for %s failed or partially filled: %v", strat.Name(), result.Error)
+			log.Printf("   📝 Recorded %d fills - these will be managed as strategy positions", len(result.LegResults))
 		}
 	}
 }
