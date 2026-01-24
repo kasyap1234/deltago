@@ -128,21 +128,21 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
 	// Calculate prices
-	// SELL orders use BestBid (price buyers will pay us)
-	// BUY orders use BestAsk (price we pay sellers)
-	shortCallPrice, err := parseFloatRequired(shortCall.Quotes.BestBid, "short_call_best_bid")
+	// SELL orders use BestAsk (price we post to sell as maker)
+	// BUY orders use BestBid (price we post to buy as maker)
+	shortCallPrice, err := parseFloatRequired(shortCall.Quotes.BestAsk, "short_call_best_ask")
 	if err != nil {
 		return nil, err
 	}
-	shortPutPrice, err := parseFloatRequired(shortPut.Quotes.BestBid, "short_put_best_bid")
+	shortPutPrice, err := parseFloatRequired(shortPut.Quotes.BestAsk, "short_put_best_ask")
 	if err != nil {
 		return nil, err
 	}
-	longCallPrice, err := parseFloatRequired(longCall.Quotes.BestAsk, "long_call_best_ask")
+	longCallPrice, err := parseFloatRequired(longCall.Quotes.BestBid, "long_call_best_bid")
 	if err != nil {
 		return nil, err
 	}
-	longPutPrice, err := parseFloatRequired(longPut.Quotes.BestAsk, "long_put_best_ask")
+	longPutPrice, err := parseFloatRequired(longPut.Quotes.BestBid, "long_put_best_bid")
 	if err != nil {
 		return nil, err
 	}

@@ -207,22 +207,21 @@ func TestIronCondor_BuildEntryOrders(t *testing.T) {
 	}
 	
 	// Credit Check
-	// Short Call 110 Bid: 10.0 - 6*1.0 = 4.0? No.
-	// Index for 110 is 6 (0=80, 6=110). Bid = 10 - 6 = 4.0.
-	// Short Put 90 Bid: 2.0 + 2*1.0 = 4.0. (Index 2).
-	// Long Call 115 Ask: 10.2 - 7*1.0 = 3.2.
-	// Long Put 85 Ask: 2.2 + 1*1.0 = 3.2.
+	// Short Call 110 Ask: 10.2 - 6*1.0 = 4.2.
+	// Short Put 90 Ask: 2.2 + 2*1.0 = 4.2. (Index 2).
+	// Long Call 115 Bid: 10.0 - 7*1.0 = 3.0.
+	// Long Put 85 Bid: 2.0 + 1*1.0 = 3.0.
 	
-	// Credit = (4.0 + 4.0) - (3.2 + 3.2) = 8.0 - 6.4 = 1.6.
+	// Credit = (4.2 + 4.2) - (3.0 + 3.0) = 8.4 - 6.0 = 2.4.
 	
 	meta, ok := order.Metadata.(*StrategyPositionMetadata)
 	if !ok {
 		t.Fatal("Metadata type assertion failed")
 	}
 
-	// Credit = (4.0 + 4.0) - (3.2 + 3.2) = 1.6, multiplied by 0.001 (BTC options multiplier)
+	// Credit = (4.2 + 4.2) - (3.0 + 3.0) = 2.4, multiplied by 0.001 (BTC options multiplier)
 	multiplier := 0.001
-	expectedCredit := 1.6 * multiplier
+	expectedCredit := 2.4 * multiplier
 	if math.Abs(meta.NetPremium-expectedCredit) > 0.0001 {
 		t.Errorf("Expected NetPremium %.4f, got %.4f", expectedCredit, meta.NetPremium)
 	}
