@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kiwhtas/deltago/internal/delta"
@@ -319,7 +320,10 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 		state, err = m.PlaceAndWait(ctx, req, timeout/time.Duration(cfg.MaxRetries+1))
 		if err != nil {
 			log.Printf("DEBUG [Execution]: Order attempt %d failed: %v (Price: %.2f, ID: %s)", attempt, err, req.Price, req.ClientOrderID)
-			// If error was post_only rejection, we just continue to next attempt (higher/lower price)
+			if strings.Contains(err.Error(), "immediate_execution_post_only") {
+				req.PostOnly = false
+				req.TimeInForce = "ioc"
+			}
 			continue
 		}
 
