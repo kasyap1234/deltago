@@ -213,6 +213,14 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 		Legs:          legs,
 	}
 
+	retryCfg := execution.RetryConfig{
+		MaxRetries:    3,
+		PriceStepPct:  0.02,
+		RetryInterval: 2 * time.Second,
+		AllowCrossing: false,
+		Mode:          execution.ModeMaker,
+	}
+
 	// REMOVED: Position assignment moved to ConfirmEntry()
 	// Position will only be set AFTER fills are verified
 
@@ -223,7 +231,7 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 		Timeout:    120 * time.Second,
 		AllOrNone:  true,
 		UseRetry:   true,
-		RetryCfg:   execution.DefaultRetryConfig,
+		RetryCfg:   retryCfg,
 		Legs: []execution.OrderRequest{
 			// Long call (protection) - BUY FIRST
 			{

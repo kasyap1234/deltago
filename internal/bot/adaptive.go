@@ -507,8 +507,28 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 			}
 
 			pos := strat.GetPosition()
-			log.Printf("   ✅ Position opened: premium=%.2f max_loss=%.2f",
-				pos.NetPremium, pos.MaxLoss)
+			if pos != nil {
+				log.Printf("   ✅ Position opened: premium=%.2f max_loss=%.2f",
+					pos.NetPremium, pos.MaxLoss)
+			}
+
+			if pos != nil && pos.NetPremium <= 0 {
+				if _, ok := strat.(*strategies.IronCondor); ok {
+					log.Printf("⚠️ %s: invalid net premium %.2f, closing immediately", strat.Name(), pos.NetPremium)
+					closeOrders, err := strat.BuildCloseOrders(ctx, input)
+					if err != nil {
+						log.Printf("Error building close orders for %s: %v", strat.Name(), err)
+					} else {
+						_, err = execution.ExecuteMultiLeg(ctx, b.execMgr, *closeOrders)
+						if err != nil {
+							log.Printf("Error closing %s: %v", strat.Name(), err)
+						}
+					}
+					if clearer, ok := strat.(interface{ ClearPosition() }); ok {
+						clearer.ClearPosition()
+					}
+				}
+			}
 		} else {
 			log.Printf("   ⚠️ Partial fill or failed: %v", result.Error)
 		}
