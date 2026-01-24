@@ -21,7 +21,7 @@ type IronCondor struct {
 	WingWidth  int     // number of strikes for wings
 }
 
-func NewIronCondor(client *delta.Client, positionSize int, shortDelta float64, wingWidth int) *IronCondor {
+func NewIronCondor(client *delta.Client, positionSize int, shortDelta float64, wingWidth int, testnet bool) *IronCondor {
 	return &IronCondor{
 		BaseStrategy: BaseStrategy{
 			id:                 "iron_condor",
@@ -31,6 +31,7 @@ func NewIronCondor(client *delta.Client, positionSize int, shortDelta float64, w
 			StopLossMultiplier: 1.5, // exit at 1.5x premium collected
 			TakeProfitPct:      0.5, // take profit at 50% of max profit
 			MaxDTE:             7,
+			Testnet:            testnet,
 		},
 		ShortDelta: shortDelta,
 		WingWidth:  wingWidth,
@@ -216,14 +217,6 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 		Legs:          legs,
 	}
 
-	retryCfg := execution.RetryConfig{
-		MaxRetries:    3,
-		PriceStepPct:  0.02,
-		RetryInterval: 2 * time.Second,
-		AllowCrossing: false,
-		Mode:          execution.ModeMaker,
-	}
-
 	// REMOVED: Position assignment moved to ConfirmEntry()
 	// Position will only be set AFTER fills are verified
 
@@ -234,7 +227,7 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 		Timeout:    120 * time.Second,
 		AllOrNone:  true,
 		UseRetry:   true,
-		RetryCfg:   retryCfg,
+		RetryCfg:   s.GetRetryCfg(),
 		Legs: []execution.OrderRequest{
 			// Long call (protection) - BUY FIRST
 			{

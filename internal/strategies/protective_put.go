@@ -19,7 +19,7 @@ type ProtectivePut struct {
 	TargetDelta float64 // target delta for puts (e.g., 0.20)
 }
 
-func NewProtectivePut(client *delta.Client, positionSize int) *ProtectivePut {
+func NewProtectivePut(client *delta.Client, positionSize int, testnet bool) *ProtectivePut {
 	return &ProtectivePut{
 		BaseStrategy: BaseStrategy{
 			id:                 "protective_put",
@@ -29,6 +29,7 @@ func NewProtectivePut(client *delta.Client, positionSize int) *ProtectivePut {
 			StopLossMultiplier: 0.7, // exit if lose 70% of premium
 			TakeProfitPct:      2.0, // take profit at 200% gain
 			MaxDTE:             14,
+			Testnet:            testnet,
 		},
 		TargetDelta: 0.20, // slightly OTM
 	}
@@ -105,7 +106,7 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 		Timeout:    60 * time.Second,
 		AllOrNone:  true,
 		UseRetry:   true,
-		RetryCfg:   execution.DefaultRetryConfig,
+		RetryCfg:   s.GetRetryCfg(),
 		Legs: []execution.OrderRequest{
 			{
 				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lp", now),

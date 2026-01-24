@@ -62,6 +62,7 @@ func main() {
 	}
 	botCfg.IronCondorDelta = cfg.Strategy.IronCondor.ShortDelta
 	botCfg.IronCondorWings = cfg.Strategy.IronCondor.WingWidth
+	botCfg.Testnet = cfg.API.Testnet
 
 	// Create adaptive bot
 	adaptiveBot := bot.NewAdaptiveBot(client, botCfg)

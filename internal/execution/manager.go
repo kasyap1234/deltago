@@ -234,25 +234,24 @@ func (m *DeltaManager) PlaceAndWait(ctx context.Context, req OrderRequest, timeo
 	return state, state.Error
 }
 
-// DefaultRetryConfig provides sensible defaults for low-liquidity options
-// Uses Maker mode to prefer limit orders (lower fees), with crossing allowed on final retry
+// DefaultRetryConfig is for MAINNET - uses limit orders for lower maker fees
 var DefaultRetryConfig = RetryConfig{
 	MaxRetries:    5,
 	PriceStepPct:  0.05, // 5% per retry
 	RetryInterval: 2 * time.Second,
-	AllowCrossing: true,      // Allow taker limit on final retry
-	Mode:          ModeMaker, // Default to Maker for lower fees
+	AllowCrossing: true,      // Allow crossing on final retry
+	Mode:          ModeMaker, // Limit orders, PostOnly for maker fees
 	AllowMarket:   false,     // Never use market orders in production
 }
 
-// TestnetRetryConfig is for testnet only - allows market orders as fallback for reliability
+// TestnetRetryConfig is for TESTNET - uses market orders for reliability on thin books
 var TestnetRetryConfig = RetryConfig{
 	MaxRetries:    3,
-	PriceStepPct:  0.10, // 10% per retry (more aggressive for testnet)
+	PriceStepPct:  0.10,
 	RetryInterval: 1 * time.Second,
 	AllowCrossing: true,
-	Mode:          ModeMaker, // Still try maker first
-	AllowMarket:   true,      // Allow market fallback on testnet
+	Mode:          ModeTaker, // Use taker/market for testnet reliability
+	AllowMarket:   true,      // Allow market orders on testnet
 }
 
 // PlaceWithRetry places an order with retry logic and price walking
@@ -321,18 +320,18 @@ func (m *DeltaManager) PlaceWithRetry(ctx context.Context, req OrderRequest, tim
 			}
 		}
 
-		// If mode is Taker, use aggressive limit order (not market) to control slippage
-		// Market orders are dangerous - no price control and higher fees
+		// If mode is Taker, use market orders (testnet) or aggressive limit (mainnet)
 		if cfg.Mode == ModeTaker {
-			// Only use market orders if explicitly allowed (testnet only)
-			if cfg.AllowMarket && attempt == cfg.MaxRetries {
+			if cfg.AllowMarket {
+				// Testnet: use market orders for reliability
 				req.OrderType = Market
 				req.PostOnly = false
 				req.TimeInForce = "ioc"
 			} else {
-				req.OrderType = Limit    // Still limit for price control
-				req.TimeInForce = "ioc"  // IOC to cross spread immediately
-				req.PostOnly = false     // Allow crossing spread (taker)
+				// Mainnet: use aggressive limit for price control
+				req.OrderType = Limit
+				req.TimeInForce = "ioc"
+				req.PostOnly = false
 			}
 		}
 

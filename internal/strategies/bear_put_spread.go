@@ -20,7 +20,7 @@ type BearPutSpread struct {
 	ShortDelta float64 // target delta for short put (e.g., -0.30)
 }
 
-func NewBearPutSpread(client *delta.Client, positionSize int) *BearPutSpread {
+func NewBearPutSpread(client *delta.Client, positionSize int, testnet bool) *BearPutSpread {
 	return &BearPutSpread{
 		BaseStrategy: BaseStrategy{
 			id:                 "bear_put_spread",
@@ -30,6 +30,7 @@ func NewBearPutSpread(client *delta.Client, positionSize int) *BearPutSpread {
 			StopLossMultiplier: 1.0,
 			TakeProfitPct:      0.5,
 			MaxDTE:             7,
+			Testnet:            testnet,
 		},
 		LongDelta:  0.50, // will be negative for puts
 		ShortDelta: 0.30,
@@ -142,7 +143,7 @@ func (s *BearPutSpread) BuildEntryOrders(ctx context.Context, in Input) (*execut
 		Timeout:    60 * time.Second,
 		AllOrNone:  true,
 		UseRetry:   true,
-		RetryCfg:   execution.DefaultRetryConfig,
+		RetryCfg:   s.GetRetryCfg(),
 		Legs: []execution.OrderRequest{
 			{
 				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lp", now),

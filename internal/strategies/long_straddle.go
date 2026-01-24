@@ -17,7 +17,7 @@ type LongStraddle struct {
 	BaseStrategy
 }
 
-func NewLongStraddle(client *delta.Client, positionSize int) *LongStraddle {
+func NewLongStraddle(client *delta.Client, positionSize int, testnet bool) *LongStraddle {
 	return &LongStraddle{
 		BaseStrategy: BaseStrategy{
 			id:                 "long_straddle",
@@ -27,6 +27,7 @@ func NewLongStraddle(client *delta.Client, positionSize int) *LongStraddle {
 			StopLossMultiplier: 0.5, // exit if lose 50% of premium paid
 			TakeProfitPct:      1.0, // take profit at 100% gain
 			MaxDTE:             7,
+			Testnet:            testnet,
 		},
 	}
 }
@@ -120,7 +121,7 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 		Timeout:    60 * time.Second,
 		AllOrNone:  true,
 		UseRetry:   true,
-		RetryCfg:   execution.DefaultRetryConfig,
+		RetryCfg:   s.GetRetryCfg(),
 		Legs: []execution.OrderRequest{
 			{
 				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lc", now),

@@ -119,7 +119,16 @@ type BaseStrategy struct {
 	PositionSize       int
 	StopLossMultiplier float64
 	TakeProfitPct      float64
-	MaxDTE             int // max days to expiry
+	MaxDTE             int  // max days to expiry
+	Testnet            bool // If true, use aggressive execution for thin orderbooks
+}
+
+// GetRetryCfg returns the appropriate retry config based on testnet mode
+func (b *BaseStrategy) GetRetryCfg() execution.RetryConfig {
+	if b.Testnet {
+		return execution.TestnetRetryConfig
+	}
+	return execution.DefaultRetryConfig
 }
 
 func (b *BaseStrategy) ID() string   { return b.id }

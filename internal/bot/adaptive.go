@@ -50,6 +50,7 @@ type Config struct {
 	RegimeInterval  time.Duration // regime detection interval
 	IronCondorDelta float64
 	IronCondorWings int
+	Testnet         bool // If true, use more aggressive execution for thin orderbooks
 }
 
 // DefaultConfig returns default configuration
@@ -68,13 +69,13 @@ func DefaultConfig() Config {
 
 // NewAdaptiveBot creates a new adaptive trading bot
 func NewAdaptiveBot(client *delta.Client, cfg Config) *AdaptiveBot {
-	// Create strategies
+	// Create strategies with testnet awareness
 	strats := []strategies.Strategy{
-		strategies.NewBullCallSpread(client, cfg.PositionSize),
-		strategies.NewBearPutSpread(client, cfg.PositionSize),
-		strategies.NewIronCondor(client, cfg.PositionSize, cfg.IronCondorDelta, cfg.IronCondorWings),
-		strategies.NewLongStraddle(client, cfg.PositionSize),
-		strategies.NewProtectivePut(client, cfg.PositionSize),
+		strategies.NewBullCallSpread(client, cfg.PositionSize, cfg.Testnet),
+		strategies.NewBearPutSpread(client, cfg.PositionSize, cfg.Testnet),
+		strategies.NewIronCondor(client, cfg.PositionSize, cfg.IronCondorDelta, cfg.IronCondorWings, cfg.Testnet),
+		strategies.NewLongStraddle(client, cfg.PositionSize, cfg.Testnet),
+		strategies.NewProtectivePut(client, cfg.PositionSize, cfg.Testnet),
 	}
 
 	// Create robust detector with sensible defaults

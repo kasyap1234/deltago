@@ -21,7 +21,7 @@ type BullCallSpread struct {
 	ShortDelta float64 // target delta for short call (e.g., 0.30)
 }
 
-func NewBullCallSpread(client *delta.Client, positionSize int) *BullCallSpread {
+func NewBullCallSpread(client *delta.Client, positionSize int, testnet bool) *BullCallSpread {
 	return &BullCallSpread{
 		BaseStrategy: BaseStrategy{
 			id:                 "bull_call_spread",
@@ -31,6 +31,7 @@ func NewBullCallSpread(client *delta.Client, positionSize int) *BullCallSpread {
 			StopLossMultiplier: 1.0, // risk max debit paid
 			TakeProfitPct:      0.5, // take profit at 50% of max profit
 			MaxDTE:             7,
+			Testnet:            testnet,
 		},
 		LongDelta:  0.50,
 		ShortDelta: 0.30,
@@ -147,7 +148,7 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 		Timeout:    60 * time.Second,
 		AllOrNone:  true,
 		UseRetry:   true,
-		RetryCfg:   execution.DefaultRetryConfig,
+		RetryCfg:   s.GetRetryCfg(),
 		Legs: []execution.OrderRequest{
 			{
 				ClientOrderID: execution.GenerateClientOrderID(strategyID, "lc", now),
