@@ -36,6 +36,7 @@ type AdaptiveBot struct {
 	currentRegime   *regime.Regime
 	stopChan        chan struct{}
 	stopOnce        sync.Once // Prevents double-close panic
+	cancelFunc      context.CancelFunc
 	lastRegimeCheck time.Time
 	uncertainCount  int // Count of consecutive uncertain regimes
 }
@@ -108,6 +109,29 @@ func (b *AdaptiveBot) Start(ctx context.Context) error {
 	b.stopOnce = sync.Once{}         // Reset once for restart
 	b.mu.Unlock()
 
+	ctx, cancel := context.WithCancel(ctx)
+	b.cancelFunc = cancel
+
+	// CRITICAL: Check for orphaned positions from previous runs
+	positions, err := b.client.GetPositions()
+	if err != nil {
+		log.Printf("⚠️ Warning: Failed to check existing positions at startup: %v", err)
+	} else if len(positions) > 0 {
+		log.Printf("🚨 CRITICAL: Found %d existing positions at startup!", len(positions))
+		for _, pos := range positions {
+			if pos.Size != 0 {
+				log.Printf("   Position: %s size=%d", pos.ProductSymbol, pos.Size)
+			}
+		}
+		log.Println("🛑 Calling EmergencyClose to flatten before starting...")
+		if err := b.EmergencyClose(ctx); err != nil {
+			log.Printf("⚠️ EmergencyClose failed: %v - calling CloseAllPositions", err)
+			_ = b.client.CloseAllPositions()
+		}
+		// Wait briefly for closes to process
+		time.Sleep(2 * time.Second)
+	}
+
 	log.Println("🤖 Adaptive Bot Starting...")
 	log.Printf("   Underlying: %s", b.underlying)
 	log.Printf("   Loop Interval: %v", b.loopInterval)
@@ -131,6 +155,9 @@ func (b *AdaptiveBot) Stop() {
 		b.running = false
 		b.mu.Unlock()
 
+		if b.cancelFunc != nil {
+			b.cancelFunc()
+		}
 		close(b.stopChan)
 
 		log.Println("🛑 Adaptive Bot Stopped")
@@ -220,6 +247,10 @@ func (b *AdaptiveBot) runCycle(ctx context.Context) {
 		log.Printf("Warning: failed to fetch market snapshot: %v", err)
 		return
 	}
+
+	// Audit log for regime detection debugging
+	log.Printf("🔍 Cycle: Spot=%.2f Regime=%s/%s/%s Score=%.2f",
+		snapshot.SpotPrice, r.Trend, r.Vol, r.Stress, r.Score)
 
 	// 5. Build strategy input
 	input := strategies.Input{
@@ -493,13 +524,20 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 			continue
 		}
 
-		// Always record entries that DID fill, even if not fully filled (to avoid orphaned untracked positions)
-		if len(result.LegResults) > 0 {
-			b.recordStrategyEntry(result)
+		// Count filled legs
+		filledCount := 0
+		for _, legState := range result.LegResults {
+			if legState.Status == execution.StatusFilled && legState.FilledQty > 0 {
+				filledCount++
+			}
 		}
 
-		if result.FullyFilled {
-			// Confirm the position
+		// Record entries that DID fill (for portfolio tracking)
+		if filledCount > 0 {
+			b.recordStrategyEntry(result)
+
+			// CRITICAL: Always call ConfirmEntry when ANY legs fill
+			// This ensures the strategy tracks its position so Manage() can close it
 			var meta *strategies.StrategyPositionMetadata
 			if multiLeg.Metadata != nil {
 				meta, _ = multiLeg.Metadata.(*strategies.StrategyPositionMetadata)
@@ -508,7 +546,44 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 			if err := strat.ConfirmEntry(ctx, result, meta); err != nil {
 				log.Printf("Failed to confirm entry for %s: %v", strat.Name(), err)
 			}
+		}
 
+		// Handle partial fills: flatten immediately to avoid orphaned positions
+		if !result.FullyFilled && filledCount > 0 {
+			log.Printf("⚠️ %s partial fill (%d legs). Flattening immediately to avoid unhedged exposure.", strat.Name(), filledCount)
+
+			closeOrders, err := strat.BuildCloseOrders(ctx, input)
+			if err != nil {
+				log.Printf("Error building partial-fill close for %s: %v (will retry in Manage loop)", strat.Name(), err)
+			} else {
+				closeResult, err := execution.ExecuteMultiLeg(ctx, b.execMgr, *closeOrders)
+				if err != nil {
+					log.Printf("Error flattening partial %s: %v (will continue managing)", strat.Name(), err)
+				} else if closeResult.FullyFilled {
+					log.Printf("   ✅ Partial position flattened successfully")
+					// Record realized P&L for daily loss tracking
+					closePrices := make(map[int64]float64)
+					for _, legState := range closeResult.LegResults {
+						if legState.Status == execution.StatusFilled {
+							closePrices[legState.Request.InstrumentID] = legState.AvgFillPrice
+						}
+					}
+					if len(closePrices) > 0 {
+						realizedPnL := b.portfolio.CalculateStrategyPnL(strat.ID(), closePrices)
+						b.portfolio.RecordTrade(realizedPnL)
+						log.Printf("💰 Recorded realized P&L: %.4f (Daily: %.4f)", realizedPnL, b.portfolio.DailyPnL)
+					}
+					if clearer, ok := strat.(interface{ ClearPosition() }); ok {
+						clearer.ClearPosition()
+					}
+				} else {
+					log.Printf("   ⚠️ Partial flatten incomplete, will retry in Manage loop")
+				}
+			}
+			continue
+		}
+
+		if result.FullyFilled {
 			pos := strat.GetPosition()
 			if pos != nil {
 				log.Printf("   ✅ Position opened: premium=%.2f max_loss=%.2f",
@@ -522,9 +597,22 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 					if err != nil {
 						log.Printf("Error building close orders for %s: %v", strat.Name(), err)
 					} else {
-						_, err = execution.ExecuteMultiLeg(ctx, b.execMgr, *closeOrders)
+						closeResult, err := execution.ExecuteMultiLeg(ctx, b.execMgr, *closeOrders)
 						if err != nil {
 							log.Printf("Error closing %s: %v", strat.Name(), err)
+						} else if closeResult.FullyFilled {
+							// Record realized P&L for daily loss tracking
+							closePrices := make(map[int64]float64)
+							for _, legState := range closeResult.LegResults {
+								if legState.Status == execution.StatusFilled {
+									closePrices[legState.Request.InstrumentID] = legState.AvgFillPrice
+								}
+							}
+							if len(closePrices) > 0 {
+								realizedPnL := b.portfolio.CalculateStrategyPnL(strat.ID(), closePrices)
+								b.portfolio.RecordTrade(realizedPnL)
+								log.Printf("💰 Recorded realized P&L: %.4f (Daily: %.4f)", realizedPnL, b.portfolio.DailyPnL)
+							}
 						}
 					}
 					if clearer, ok := strat.(interface{ ClearPosition() }); ok {
@@ -532,9 +620,8 @@ func (b *AdaptiveBot) checkNewEntries(ctx context.Context, input strategies.Inpu
 					}
 				}
 			}
-		} else {
-			log.Printf("   ⚠️ Entry for %s failed or partially filled: %v", strat.Name(), result.Error)
-			log.Printf("   📝 Recorded %d fills - these will be managed as strategy positions", len(result.LegResults))
+		} else if filledCount == 0 {
+			log.Printf("   ⚠️ Entry for %s failed: no legs filled: %v", strat.Name(), result.Error)
 		}
 	}
 }
@@ -673,5 +760,19 @@ func (b *AdaptiveBot) EmergencyClose(ctx context.Context) error {
 		}
 	}
 
+	// CRITICAL: Verify all positions are closed via exchange
+	// This catches orphaned positions where strategy state was lost
+	positions, err := b.client.GetPositions()
+	if err != nil {
+		log.Printf("⚠️ EmergencyClose: Failed to verify positions: %v, calling CloseAllPositions", err)
+		return b.client.CloseAllPositions()
+	}
+
+	if len(positions) > 0 {
+		log.Printf("⚠️ EmergencyClose: %d positions remain after strategy closes, calling CloseAllPositions", len(positions))
+		return b.client.CloseAllPositions()
+	}
+
+	log.Println("✅ EmergencyClose: All positions closed successfully")
 	return nil
 }

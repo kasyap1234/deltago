@@ -199,6 +199,10 @@ func (d *Detector) classifyRegime(fs *FeatureSet) *Regime {
 		} else if fs.TrendScore < -0.3 {
 			r.Trend = TrendDown
 			r.Score = math.Min(1.0, 0.5+fs.ADX/100)
+		} else {
+			// ADX strong but direction ambiguous - set baseline score
+			r.Trend = TrendSideways
+			r.Score = 0.55
 		}
 	} else if fs.ADX < 20 {
 		// Weak trend = sideways

@@ -66,7 +66,7 @@ func createTestOptionsBear(spot float64) []delta.Ticker {
 }
 
 func TestBearPutSpread_ShouldEnter(t *testing.T) {
-	strategy := NewBearPutSpread(nil, 1)
+	strategy := NewBearPutSpread(nil, 1, false)
 	
 	baseInput := Input{
 		Regime: &regime.Regime{
@@ -145,7 +145,7 @@ func TestBearPutSpread_ShouldEnter(t *testing.T) {
 }
 
 func TestBearPutSpread_BuildEntryOrders(t *testing.T) {
-	strategy := NewBearPutSpread(nil, 1)
+	strategy := NewBearPutSpread(nil, 1, false)
 	options := createTestOptionsBear(100.0)
 	
 	in := Input{
@@ -210,11 +210,14 @@ func TestBearPutSpread_BuildEntryOrders(t *testing.T) {
 		t.Errorf("Expected short leg PUT_90, got %s", shortLeg.Symbol)
 	}
 	
-	if longLeg.Price != 7.2 {
-		t.Errorf("Expected long leg price 7.2, got %.2f", longLeg.Price)
+	// PostOnly pricing:
+	// - BUY orders use BestBid (Strike 100 Put Bid = 7.0 based on formula 2.0+i*2 where i=2)
+	// - SELL orders use BestAsk (Strike 90 Put Ask = 2.2 based on formula 2.2+i*2 where i=0)
+	if longLeg.Price != 7.0 {
+		t.Errorf("Expected long leg price 7.0 (BestBid for PostOnly buy), got %.2f", longLeg.Price)
 	}
-	if shortLeg.Price != 2.0 {
-		t.Errorf("Expected short leg price 2.0, got %.2f", shortLeg.Price)
+	if shortLeg.Price != 2.2 {
+		t.Errorf("Expected short leg price 2.2 (BestAsk for PostOnly sell), got %.2f", shortLeg.Price)
 	}
 	
 	meta, ok := order.Metadata.(*StrategyPositionMetadata)
@@ -222,16 +225,16 @@ func TestBearPutSpread_BuildEntryOrders(t *testing.T) {
 		t.Fatal("Metadata type assertion failed")
 	}
 	
-	// Net debit = 7.2 - 2.0 = 5.2, multiplied by 0.001 (BTC options multiplier)
+	// Net debit = 7.0 - 2.2 = 4.8, multiplied by 0.001 (BTC options multiplier)
 	multiplier := 0.001
-	expectedDebit := (7.2 - 2.0) * multiplier // 0.0052
+	expectedDebit := (7.0 - 2.2) * multiplier // 0.0048
 	if abs(meta.NetPremium-(-expectedDebit)) > 0.0001 {
 		t.Errorf("Expected NetPremium %.4f, got %.4f", -expectedDebit, meta.NetPremium)
 	}
 }
 
 func TestBearPutSpread_ConfirmEntry(t *testing.T) {
-	strategy := NewBearPutSpread(nil, 1)
+	strategy := NewBearPutSpread(nil, 1, false)
 	
 	now := time.Now()
 	result := &execution.MultiLegResult{
@@ -290,7 +293,7 @@ func TestBearPutSpread_ConfirmEntry(t *testing.T) {
 }
 
 func TestBearPutSpread_Manage(t *testing.T) {
-	strategy := NewBearPutSpread(nil, 1)
+	strategy := NewBearPutSpread(nil, 1, false)
 
 	// Use leg IDs that match the strategy code: "lp" and "sp"
 	// Values need to be in real terms (with multiplier already applied)

@@ -43,7 +43,7 @@ func createTestOptionsProtective(spot float64) []delta.Ticker {
 }
 
 func TestProtectivePut_ShouldEnter(t *testing.T) {
-	strategy := NewProtectivePut(nil, 1)
+	strategy := NewProtectivePut(nil, 1, false)
 	
 	baseInput := Input{
 		Regime: &regime.Regime{
@@ -118,7 +118,7 @@ func TestProtectivePut_ShouldEnter(t *testing.T) {
 }
 
 func TestProtectivePut_BuildEntryOrders(t *testing.T) {
-	strategy := NewProtectivePut(nil, 1)
+	strategy := NewProtectivePut(nil, 1, false)
 	options := createTestOptionsProtective(100.0)
 	
 	in := Input{
@@ -170,7 +170,7 @@ func TestProtectivePut_BuildEntryOrders(t *testing.T) {
 }
 
 func TestProtectivePut_Manage(t *testing.T) {
-	strategy := NewProtectivePut(nil, 1)
+	strategy := NewProtectivePut(nil, 1, false)
 
 	// Use leg ID that matches the strategy code: "lp"
 	// All values need to account for the 0.001 multiplier

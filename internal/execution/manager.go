@@ -52,7 +52,7 @@ func (m *DeltaManager) Place(ctx context.Context, req OrderRequest) (*OrderAck, 
 
 	// Only set limit price for limit orders
 	if req.OrderType == Limit {
-		orderReq.LimitPrice = fmt.Sprintf("%.2f", req.Price)
+		orderReq.LimitPrice = fmt.Sprintf("%.4f", req.Price)
 	}
 
 	order, err := m.client.PlaceOrder(orderReq)
@@ -120,9 +120,8 @@ func (m *DeltaManager) PlaceAndWait(ctx context.Context, req OrderRequest, timeo
 				found = true
 				state.FilledQty = o.Size - o.UnfilledSize
 				state.Status = mapOrderState(o.State)
-				if price, err := strconv.ParseFloat(o.LimitPrice, 64); err == nil {
-					state.AvgFillPrice = price
-				}
+				// Note: Do NOT set AvgFillPrice from LimitPrice - that's not the actual fill price
+				// AvgFillPrice will be set from actual fills when order completes
 				break
 			}
 		}
@@ -136,9 +135,7 @@ func (m *DeltaManager) PlaceAndWait(ctx context.Context, req OrderRequest, timeo
 			if err == nil {
 				state.Status = mapOrderState(histOrder.State)
 				state.FilledQty = histOrder.Size - histOrder.UnfilledSize
-				if price, err := strconv.ParseFloat(histOrder.LimitPrice, 64); err == nil {
-					state.AvgFillPrice = price
-				}
+				// Note: Do NOT use LimitPrice as AvgFillPrice - use actual fills below
 			}
 
 			// Method 2: Verify via fills endpoint
@@ -416,7 +413,11 @@ func mapOrderState(state string) OrderStatus {
 	case "filled":
 		return StatusFilled
 	case "closed":
-		return StatusFilled
+		// WARNING: Some APIs use "closed" for both filled and cancelled orders.
+		// This mapping assumes closed means cancelled to be conservative.
+		// Monitor logs - if orders are actually filled, the fill data should be checked.
+		log.Printf("Warning: order state 'closed' is ambiguous - could be filled or cancelled. Treating as cancelled. Check fill data to confirm actual status.")
+		return StatusCancelled
 	case "cancelled":
 		return StatusCancelled
 	case "rejected":

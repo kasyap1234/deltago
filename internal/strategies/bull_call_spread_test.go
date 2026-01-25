@@ -58,7 +58,7 @@ func createTestOptions(spot float64) []delta.Ticker {
 }
 
 func TestBullCallSpread_ShouldEnter(t *testing.T) {
-	strategy := NewBullCallSpread(nil, 1)
+	strategy := NewBullCallSpread(nil, 1, false)
 	
 	// Base valid input
 	baseInput := Input{
@@ -154,7 +154,7 @@ func TestBullCallSpread_ShouldEnter(t *testing.T) {
 }
 
 func TestBullCallSpread_BuildEntryOrders(t *testing.T) {
-	strategy := NewBullCallSpread(nil, 1)
+	strategy := NewBullCallSpread(nil, 1, false)
 	options := createTestOptions(100.0)
 	
 	in := Input{
@@ -204,15 +204,15 @@ func TestBullCallSpread_BuildEntryOrders(t *testing.T) {
 	// Target Long Delta 0.5 -> Strike 100 (delta "0.5")
 	// Target Short Delta 0.3 -> Strike 110 (delta "0.3")
 	
-	// Verify strikes implicitly by prices or delta logic
-	// Strike 100 Ask is 6.2
-	// Strike 110 Bid is 2.0
+	// PostOnly pricing:
+	// - BUY orders use BestBid (Strike 100 Bid = 6.0)
+	// - SELL orders use BestAsk (Strike 110 Ask = 2.2)
 	
-	if longLeg.Price != 6.2 {
-		t.Errorf("Expected long leg price 6.2, got %.2f", longLeg.Price)
+	if longLeg.Price != 6.0 {
+		t.Errorf("Expected long leg price 6.0 (BestBid for PostOnly buy), got %.2f", longLeg.Price)
 	}
-	if shortLeg.Price != 2.0 {
-		t.Errorf("Expected short leg price 2.0, got %.2f", shortLeg.Price)
+	if shortLeg.Price != 2.2 {
+		t.Errorf("Expected short leg price 2.2 (BestAsk for PostOnly sell), got %.2f", shortLeg.Price)
 	}
 	
 	// Verify Metadata
@@ -225,16 +225,16 @@ func TestBullCallSpread_BuildEntryOrders(t *testing.T) {
 		t.Fatal("Metadata is not StrategyPositionMetadata")
 	}
 
-	// Net debit = 6.2 - 2.0 = 4.2, multiplied by 0.001 (BTC options multiplier)
+	// Net debit = 6.0 - 2.2 = 3.8, multiplied by 0.001 (BTC options multiplier)
 	multiplier := 0.001
-	expectedDebit := (6.2 - 2.0) * multiplier
+	expectedDebit := (6.0 - 2.2) * multiplier
 	if abs(meta.NetPremium-(-expectedDebit)) > 0.0001 {
 		t.Errorf("Expected NetPremium %.4f, got %.4f", -expectedDebit, meta.NetPremium)
 	}
 }
 
 func TestBullCallSpread_ConfirmEntry(t *testing.T) {
-	strategy := NewBullCallSpread(nil, 1)
+	strategy := NewBullCallSpread(nil, 1, false)
 	
 	now := time.Now()
 	result := &execution.MultiLegResult{
@@ -297,7 +297,7 @@ func TestBullCallSpread_ConfirmEntry(t *testing.T) {
 }
 
 func TestBullCallSpread_Manage_TakeProfit(t *testing.T) {
-	strategy := NewBullCallSpread(nil, 1)
+	strategy := NewBullCallSpread(nil, 1, false)
 
 	// Use leg IDs that match the strategy code: "lc" and "sc"
 	// All values need to account for the 0.001 multiplier

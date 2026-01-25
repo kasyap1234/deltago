@@ -3,6 +3,7 @@ package strategies
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/kiwhtas/deltago/internal/delta"
@@ -84,10 +85,16 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 	now := time.Now()
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
-	// BUY orders use BestAsk (price we pay sellers)
+	// PostOnly pricing: BUY orders price at BestBid to avoid immediate execution
 	multiplier := 0.001
-	callPrice := parseFloat(atmCall.Quotes.BestAsk)
-	putPrice := parseFloat(atmPut.Quotes.BestAsk)
+	callPrice, err := parseFloatRequired(atmCall.Quotes.BestBid, "atm_call_best_bid")
+	if err != nil {
+		return nil, err
+	}
+	putPrice, err := parseFloatRequired(atmPut.Quotes.BestBid, "atm_put_best_bid")
+	if err != nil {
+		return nil, err
+	}
 	totalDebit := (callPrice + putPrice) * float64(s.PositionSize) * multiplier
 
 	// Prepare metadata
@@ -106,12 +113,15 @@ func (s *LongStraddle) BuildEntryOrders(ctx context.Context, in Input) (*executi
 		},
 	}
 
+	// Calculate breakevens using raw premium (before multiplier) to match strike price units
+	rawPremiumPerContract := callPrice + putPrice
+
 	metadata := &StrategyPositionMetadata{
 		NetPremium:    -totalDebit,
 		MaxLoss:       totalDebit,
 		MaxProfit:     999999,
-		BreakevenLow:  atmStrike - (totalDebit / float64(s.PositionSize)),
-		BreakevenHigh: atmStrike + (totalDebit / float64(s.PositionSize)),
+		BreakevenLow:  atmStrike - rawPremiumPerContract,
+		BreakevenHigh: atmStrike + rawPremiumPerContract,
 		Legs:          legs,
 	}
 
@@ -208,9 +218,13 @@ func (s *LongStraddle) ConfirmEntry(ctx context.Context, result *execution.Multi
 		maxProfit = metadata.MaxProfit
 
 		atmStrike := legs[0].Strike
-		premiumPerContract := -actualNet / float64(s.PositionSize)
-		breakevenLow = atmStrike - premiumPerContract
-		breakevenHigh = atmStrike + premiumPerContract
+		// Calculate breakevens using raw premium (before multiplier) to match strike price units
+		rawPremiumPerContract := 0.0
+		for _, leg := range legs {
+			rawPremiumPerContract += leg.EntryPrice
+		}
+		breakevenLow = atmStrike - rawPremiumPerContract
+		breakevenHigh = atmStrike + rawPremiumPerContract
 	}
 
 	// NOW set the position with actual fill data (thread-safe)
@@ -264,25 +278,25 @@ func (s *LongStraddle) Manage(ctx context.Context, in Input) ([]execution.OrderR
 	// Take profit: 100% gain
 	if pos.CurrentPnL >= totalPaid*s.TakeProfitPct {
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	// Stop loss: lose 50% of premium
 	if pos.CurrentPnL <= -totalPaid*s.StopLossMultiplier {
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	// Vol expansion achieved - close if IV becomes high
 	if in.Regime.Vol == regime.VolHigh && pos.CurrentPnL > 0 {
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	// If trend emerges strongly, let winners run but protect profits
 	if in.Regime.Trend != regime.TrendSideways && pos.CurrentPnL > totalPaid*0.3 {
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	s.mu.Unlock()
@@ -290,28 +304,29 @@ func (s *LongStraddle) Manage(ctx context.Context, in Input) ([]execution.OrderR
 }
 
 func (s *LongStraddle) BuildCloseOrders(ctx context.Context, in Input) (*execution.MultiLegOrder, error) {
-	orders, err := s.buildCloseOrderRequests(in)
+	pos := s.GetPosition()
+	if pos == nil {
+		return nil, fmt.Errorf("no position to close")
+	}
+
+	orders, err := s.buildCloseOrderRequests(pos, in)
 	if err != nil {
 		return nil, err
 	}
 
 	return &execution.MultiLegOrder{
-		StrategyID: s.position.StrategyID,
+		StrategyID: pos.StrategyID,
 		Legs:       orders,
 		Timeout:    30 * time.Second,
 		AllOrNone:  false,
 	}, nil
 }
 
-func (s *LongStraddle) buildCloseOrderRequests(in Input) ([]execution.OrderRequest, error) {
-	if !s.HasPosition() {
-		return nil, fmt.Errorf("no position to close")
-	}
-
+func (s *LongStraddle) buildCloseOrderRequests(pos *StrategyPosition, in Input) ([]execution.OrderRequest, error) {
 	var orders []execution.OrderRequest
 	now := time.Now()
 
-	for _, leg := range s.position.Legs {
+	for _, leg := range pos.Legs {
 		var price float64
 		for _, opt := range in.Snapshot.Options {
 			if opt.ProductID == leg.InstrumentID {
@@ -320,8 +335,18 @@ func (s *LongStraddle) buildCloseOrderRequests(in Input) ([]execution.OrderReque
 			}
 		}
 
+		if price <= 0 {
+			// Fallback: use entry price with buffer to ensure fill
+			// Long straddle only has long legs, so we're always selling to close
+			price = leg.EntryPrice * 0.5 // Accept 50% less to close longs
+			if price <= 0 {
+				price = 0.01 // Absolute minimum
+			}
+			log.Printf("⚠️ LongStraddle: No quote for %s, using fallback price %.4f", leg.Symbol, price)
+		}
+
 		orders = append(orders, execution.OrderRequest{
-			ClientOrderID: execution.GenerateClientOrderID(s.position.StrategyID, leg.ID+"_close", now),
+			ClientOrderID: execution.GenerateClientOrderID(pos.StrategyID, leg.ID+"_close", now),
 			InstrumentID:  leg.InstrumentID,
 			Symbol:        leg.Symbol,
 			Side:          execution.Sell,
@@ -330,7 +355,7 @@ func (s *LongStraddle) buildCloseOrderRequests(in Input) ([]execution.OrderReque
 			OrderType:     execution.Limit,
 			ReduceOnly:    true,
 			TimeInForce:   "ioc",
-			StrategyID:    s.position.StrategyID,
+			StrategyID:    pos.StrategyID,
 			LegID:         leg.ID + "_close",
 		})
 	}

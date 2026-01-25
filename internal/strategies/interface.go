@@ -143,7 +143,14 @@ func (b *BaseStrategy) HasPosition() bool {
 func (b *BaseStrategy) GetPosition() *StrategyPosition {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return b.position
+	if b.position == nil {
+		return nil
+	}
+	// Return a deep copy to prevent data races
+	posCopy := *b.position
+	posCopy.Legs = make([]Leg, len(b.position.Legs))
+	copy(posCopy.Legs, b.position.Legs)
+	return &posCopy
 }
 
 // SetPosition sets the position with proper locking

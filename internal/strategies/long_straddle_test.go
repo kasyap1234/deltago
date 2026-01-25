@@ -59,7 +59,7 @@ func createTestOptionsStraddle(spot float64) []delta.Ticker {
 }
 
 func TestLongStraddle_ShouldEnter(t *testing.T) {
-	strategy := NewLongStraddle(nil, 1)
+	strategy := NewLongStraddle(nil, 1, false)
 	
 	baseInput := Input{
 		Regime: &regime.Regime{
@@ -131,7 +131,7 @@ func TestLongStraddle_ShouldEnter(t *testing.T) {
 }
 
 func TestLongStraddle_BuildEntryOrders(t *testing.T) {
-	strategy := NewLongStraddle(nil, 1)
+	strategy := NewLongStraddle(nil, 1, false)
 	options := createTestOptionsStraddle(100.0)
 	
 	in := Input{
@@ -156,13 +156,15 @@ func TestLongStraddle_BuildEntryOrders(t *testing.T) {
 	}
 
 	// Verify Legs: Both Long, ATM Strike 100
+	// PostOnly pricing: BUY orders use BestBid
+	// In createTestOptionsStraddle, all options have BestBid = 5.0
 	for _, leg := range order.Legs {
 		if leg.Side != execution.Buy {
 			t.Error("Leg must be Buy")
 		}
-		// Strike 100 corresponds to price 5.2
-		if leg.Price != 5.2 {
-			t.Errorf("Expected price 5.2, got %.2f", leg.Price)
+		// All options have BestBid = 5.0 in this fixture
+		if leg.Price != 5.0 {
+			t.Errorf("Expected price 5.0 (BestBid for PostOnly buy), got %.2f", leg.Price)
 		}
 		if leg.Symbol != "CALL_100" && leg.Symbol != "PUT_100" {
 			t.Errorf("Unexpected symbol %s", leg.Symbol)
@@ -174,16 +176,16 @@ func TestLongStraddle_BuildEntryOrders(t *testing.T) {
 		t.Fatal("Metadata type assertion failed")
 	}
 
-	// Total debit: (5.2 + 5.2) * 0.001 (BTC options multiplier) = 0.0104
+	// Total debit: (5.0 + 5.0) * 0.001 (BTC options multiplier) = 0.010
 	multiplier := 0.001
-	expectedDebit := 10.4 * multiplier
+	expectedDebit := 10.0 * multiplier
 	if math.Abs(meta.NetPremium-(-expectedDebit)) > 0.0001 {
 		t.Errorf("Expected NetPremium %.4f, got %.4f", -expectedDebit, meta.NetPremium)
 	}
 }
 
 func TestLongStraddle_Manage(t *testing.T) {
-	strategy := NewLongStraddle(nil, 1)
+	strategy := NewLongStraddle(nil, 1, false)
 
 	// Use leg IDs that match the strategy code: "lc" and "lp"
 	// All values need to account for the 0.001 multiplier

@@ -3,6 +3,7 @@ package strategies
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/kiwhtas/deltago/internal/delta"
@@ -77,9 +78,12 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 	now := time.Now()
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
-	// BUY orders use BestAsk (price we pay sellers)
+	// PostOnly pricing: BUY orders price at BestBid to avoid immediate execution
 	multiplier := 0.001
-	putPrice := parseFloat(put.Quotes.BestAsk)
+	putPrice, err := parseFloatRequired(put.Quotes.BestBid, "put_best_bid")
+	if err != nil {
+		return nil, err
+	}
 	totalDebit := putPrice * float64(s.PositionSize) * multiplier
 
 	// Prepare metadata
@@ -92,11 +96,12 @@ func (s *ProtectivePut) BuildEntryOrders(ctx context.Context, in Input) (*execut
 		},
 	}
 
+	// BreakevenLow uses raw putPrice (before multiplier) to match strike price units
 	metadata := &StrategyPositionMetadata{
 		NetPremium:   -totalDebit,
 		MaxLoss:      totalDebit,
 		MaxProfit:    parseFloat(put.StrikePrice) * float64(s.PositionSize) * multiplier,
-		BreakevenLow: parseFloat(put.StrikePrice) - putPrice,
+		BreakevenLow: parseFloat(put.StrikePrice) - putPrice, // putPrice is raw (not scaled)
 		Legs:         legs,
 	}
 
@@ -207,13 +212,13 @@ func (s *ProtectivePut) Manage(ctx context.Context, in Input) ([]execution.Order
 	// Take profit at 200% gain
 	if pos.CurrentPnL >= paidPremium*s.TakeProfitPct {
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	// Stop loss at 70% premium decay
 	if pos.CurrentPnL <= -paidPremium*s.StopLossMultiplier {
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	// Close if regime normalizes and we're still profitable
@@ -221,7 +226,7 @@ func (s *ProtectivePut) Manage(ctx context.Context, in Input) ([]execution.Order
 		in.Regime.Trend != regime.TrendDown &&
 		pos.CurrentPnL > 0 {
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	s.mu.Unlock()
@@ -229,26 +234,27 @@ func (s *ProtectivePut) Manage(ctx context.Context, in Input) ([]execution.Order
 }
 
 func (s *ProtectivePut) BuildCloseOrders(ctx context.Context, in Input) (*execution.MultiLegOrder, error) {
-	orders, err := s.buildCloseOrderRequests(in)
+	pos := s.GetPosition()
+	if pos == nil {
+		return nil, fmt.Errorf("no position to close")
+	}
+
+	orders, err := s.buildCloseOrderRequests(pos, in)
 	if err != nil {
 		return nil, err
 	}
 
 	return &execution.MultiLegOrder{
-		StrategyID: s.position.StrategyID,
+		StrategyID: pos.StrategyID,
 		Legs:       orders,
 		Timeout:    30 * time.Second,
 		AllOrNone:  true,
 	}, nil
 }
 
-func (s *ProtectivePut) buildCloseOrderRequests(in Input) ([]execution.OrderRequest, error) {
-	if !s.HasPosition() {
-		return nil, fmt.Errorf("no position to close")
-	}
-
+func (s *ProtectivePut) buildCloseOrderRequests(pos *StrategyPosition, in Input) ([]execution.OrderRequest, error) {
 	now := time.Now()
-	leg := s.position.Legs[0]
+	leg := pos.Legs[0]
 
 	var price float64
 	for _, opt := range in.Snapshot.Options {
@@ -258,9 +264,19 @@ func (s *ProtectivePut) buildCloseOrderRequests(in Input) ([]execution.OrderRequ
 		}
 	}
 
+	if price <= 0 {
+		// Fallback: use entry price with buffer to ensure fill
+		// Protective put only has long legs, so we're always selling to close
+		price = leg.EntryPrice * 0.5 // Accept 50% less to close longs
+		if price <= 0 {
+			price = 0.01 // Absolute minimum
+		}
+		log.Printf("⚠️ ProtectivePut: No quote for %s, using fallback price %.4f", leg.Symbol, price)
+	}
+
 	return []execution.OrderRequest{
 		{
-			ClientOrderID: execution.GenerateClientOrderID(s.position.StrategyID, leg.ID+"_close", now),
+			ClientOrderID: execution.GenerateClientOrderID(pos.StrategyID, leg.ID+"_close", now),
 			InstrumentID:  leg.InstrumentID,
 			Symbol:        leg.Symbol,
 			Side:          execution.Sell,
@@ -269,7 +285,7 @@ func (s *ProtectivePut) buildCloseOrderRequests(in Input) ([]execution.OrderRequ
 			OrderType:     execution.Limit,
 			ReduceOnly:    true,
 			TimeInForce:   "ioc",
-			StrategyID:    s.position.StrategyID,
+			StrategyID:    pos.StrategyID,
 			LegID:         leg.ID + "_close",
 		},
 	}, nil

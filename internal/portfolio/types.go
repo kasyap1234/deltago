@@ -1,6 +1,7 @@
 package portfolio
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -97,12 +98,13 @@ func (s *State) UpdatePosition(pos *Position) {
 	s.recalculateGreeks()
 }
 
-// RemovePosition removes a position
+// RemovePosition removes a position and clears its instrument mapping
 func (s *State) RemovePosition(instrumentID int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	delete(s.Positions, instrumentID)
+	delete(s.InstrumentToStrategy, instrumentID)
 	s.recalculateGreeks()
 }
 
@@ -133,7 +135,7 @@ func (s *State) GetPositions() map[int64]*Position {
 	return positions
 }
 
-// GetPositionsByStrategy returns positions for a strategy
+// GetPositionsByStrategy returns copies of positions for a strategy
 func (s *State) GetPositionsByStrategy(strategyID string) []*Position {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -141,7 +143,8 @@ func (s *State) GetPositionsByStrategy(strategyID string) []*Position {
 	var positions []*Position
 	for _, p := range s.Positions {
 		if p.StrategyID == strategyID {
-			positions = append(positions, p)
+			copyPos := *p
+			positions = append(positions, &copyPos)
 		}
 	}
 	return positions
@@ -211,7 +214,7 @@ func (s *State) CalculateStrategyPnL(strategyID string, closeResults map[int64]f
 		}
 
 		multiplier := 0.001 // BTC options contract size
-		if entry.Side == "buy" {
+		if strings.EqualFold(entry.Side, "buy") {
 			// Long position: P&L = (exit - entry) * qty * multiplier
 			totalPnL += (exitPrice - entry.EntryPrice) * float64(entry.Qty) * multiplier
 		} else {

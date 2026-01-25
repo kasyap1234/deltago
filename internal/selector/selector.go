@@ -138,6 +138,13 @@ func (s *RuleBasedSelector) scoreStrategy(strat strategies.Strategy, r *regime.R
 	}
 	// No bonus if vol preference doesn't match (mismatch is penalty by omission)
 
+	// Explicit penalty for vol mismatch: strategy prefers opposite vol
+	if (prefVol == regime.VolHigh && r.Vol == regime.VolLow) ||
+		(prefVol == regime.VolLow && r.Vol == regime.VolHigh) {
+		score.Score *= 0.3
+		score.Reasons = append(score.Reasons, fmt.Sprintf("vol mismatch: prefers %s but regime is %s", prefVol, r.Vol))
+	}
+
 	// Regime confidence boost
 	score.Score *= r.Score
 

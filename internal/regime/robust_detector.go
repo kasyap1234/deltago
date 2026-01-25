@@ -78,13 +78,14 @@ func DefaultRobustConfig() RobustConfig {
 }
 
 type TimeframeData struct {
-	name         string
-	prices       []float64
-	highs        []float64
-	lows         []float64
-	volumes      []float64
-	lastUpdate   time.Time
-	maxCandles   int
+	name          string
+	prices        []float64
+	highs         []float64
+	lows          []float64
+	volumes       []float64
+	lastUpdate    time.Time
+	lastTimestamp time.Time // Track last seen candle timestamp to prevent duplicates
+	maxCandles    int
 }
 
 type RegimeSnapshot struct {
@@ -137,11 +138,17 @@ func (d *RobustDetector) UpdateLongTF(candle OHLCV) {
 }
 
 func (tf *TimeframeData) addCandle(c OHLCV) {
+	// Skip candles that are not newer than the last seen timestamp to prevent duplicates
+	if !tf.lastTimestamp.IsZero() && !c.Timestamp.After(tf.lastTimestamp) {
+		return
+	}
+
 	tf.prices = append(tf.prices, c.Close)
 	tf.highs = append(tf.highs, c.High)
 	tf.lows = append(tf.lows, c.Low)
 	tf.volumes = append(tf.volumes, c.Volume)
 	tf.lastUpdate = c.Timestamp
+	tf.lastTimestamp = c.Timestamp
 
 	// Trim to max size
 	if len(tf.prices) > tf.maxCandles {
@@ -150,6 +157,27 @@ func (tf *TimeframeData) addCandle(c OHLCV) {
 		tf.lows = tf.lows[1:]
 		tf.volumes = tf.volumes[1:]
 	}
+}
+
+// ClearData resets all timeframe data and timestamps
+func (d *RobustDetector) ClearData() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.shortTF.clear()
+	d.mediumTF.clear()
+	d.longTF.clear()
+	d.currentRegime = nil
+	d.regimeHistory = make([]RegimeSnapshot, 0, d.config.HistorySize)
+	d.trendConfidence = make([]float64, 0, 20)
+}
+
+func (tf *TimeframeData) clear() {
+	tf.prices = tf.prices[:0]
+	tf.highs = tf.highs[:0]
+	tf.lows = tf.lows[:0]
+	tf.volumes = tf.volumes[:0]
+	tf.lastUpdate = time.Time{}
+	tf.lastTimestamp = time.Time{}
 }
 
 // Detect performs robust regime detection with multiple confirmations

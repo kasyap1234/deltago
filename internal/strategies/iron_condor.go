@@ -50,8 +50,8 @@ func (s *IronCondor) ShouldEnter(ctx context.Context, in Input) (bool, string, e
 	if s.HasPosition() {
 		return false, "already in position", nil
 	}
-	if in.Portfolio != nil && len(in.Portfolio.GetPositions()) > 0 {
-		return false, "existing open positions", nil
+	if in.Portfolio != nil && len(in.Portfolio.GetPositionsByStrategy("iron_condor")) > 0 {
+		return false, "existing iron condor positions", nil
 	}
 
 	if in.Regime.Trend != regime.TrendSideways {
@@ -218,12 +218,15 @@ func (s *IronCondor) BuildEntryOrders(ctx context.Context, in Input) (*execution
 
 	maxLoss := ((maxSpreadWidth * float64(s.PositionSize)) * multiplier) - netCredit
 
+	// Raw per-contract premium (before multiplier) for breakeven calculation
+	rawPremiumPerContract := (shortCallPrice + shortPutPrice - longCallPrice - longPutPrice) / float64(s.PositionSize)
+
 	metadata := &StrategyPositionMetadata{
 		NetPremium:    netCredit,
 		MaxLoss:       maxLoss,
 		MaxProfit:     netCredit,
-		BreakevenLow:  shortPutStrike - netCredit/float64(s.PositionSize),
-		BreakevenHigh: shortCallStrike + netCredit/float64(s.PositionSize),
+		BreakevenLow:  shortPutStrike - rawPremiumPerContract,
+		BreakevenHigh: shortCallStrike + rawPremiumPerContract,
 		Legs:          legs,
 	}
 
@@ -366,9 +369,9 @@ func (s *IronCondor) ConfirmEntry(ctx context.Context, result *execution.MultiLe
 		// Fallback calculation logic
 		var shortCallStrike, shortPutStrike float64
 		for _, leg := range legs {
-			if leg.ID == "short_call" {
+			if leg.ID == "sc" {
 				shortCallStrike = leg.Strike
-			} else if leg.ID == "short_put" {
+			} else if leg.ID == "sp" {
 				shortPutStrike = leg.Strike
 			}
 		}
@@ -439,7 +442,7 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 	if pos.CurrentPnL >= pos.MaxProfit*s.TakeProfitPct {
 		log.Printf("📥 Iron Condor: Take Profit triggered (PnL=%.2f, target=%.2f)", pos.CurrentPnL, pos.MaxProfit*s.TakeProfitPct)
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	// Stop loss: close at 1.5x premium collected loss
@@ -447,14 +450,14 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 	if pos.CurrentPnL <= stopLossLevel {
 		log.Printf("📥 Iron Condor: Stop Loss triggered (PnL=%.2f, limit=%.2f)", pos.CurrentPnL, stopLossLevel)
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	// Regime change: close if trend emerges or crash
 	if in.Regime.Trend != regime.TrendSideways || in.Regime.Stress == regime.StressCrash {
 		log.Printf("📥 Iron Condor: Regime change exit (Trend=%s, Stress=%s)", in.Regime.Trend, in.Regime.Stress)
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	// Breach check: if price approaches short strikes, consider early exit
@@ -468,7 +471,7 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 				log.Printf("📥 Iron Condor: Early exit due to strike breach (Spot=%.2f, Strike=%.2f, Buffer=%.2f)",
 					spot, leg.Strike, threshold)
 				s.mu.Unlock()
-				return s.buildCloseOrderRequests(in)
+				return s.buildCloseOrderRequests(pos, in)
 			}
 		}
 	}
@@ -478,25 +481,26 @@ func (s *IronCondor) Manage(ctx context.Context, in Input) ([]execution.OrderReq
 }
 
 func (s *IronCondor) BuildCloseOrders(ctx context.Context, in Input) (*execution.MultiLegOrder, error) {
-	orders, err := s.buildCloseOrderRequests(in)
+	pos := s.GetPosition()
+	if pos == nil {
+		return nil, fmt.Errorf("no position to close")
+	}
+
+	orders, err := s.buildCloseOrderRequests(pos, in)
 	if err != nil {
 		return nil, err
 	}
 
 	return &execution.MultiLegOrder{
-		StrategyID: s.position.StrategyID,
+		StrategyID: pos.StrategyID,
 		Legs:       orders,
 		Timeout:    30 * time.Second,
 		AllOrNone:  false,
 	}, nil
 }
 
-func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest, error) {
-	if !s.HasPosition() {
-		return nil, fmt.Errorf("no position to close")
-	}
-
-	log.Printf("📦 Iron Condor buildCloseOrderRequests: legs=%d", len(s.position.Legs))
+func (s *IronCondor) buildCloseOrderRequests(pos *StrategyPosition, in Input) ([]execution.OrderRequest, error) {
+	log.Printf("📦 Iron Condor buildCloseOrderRequests: legs=%d", len(pos.Legs))
 
 	var orders []execution.OrderRequest
 	now := time.Now()
@@ -507,22 +511,33 @@ func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest
 
 	// First: close shorts (buy to close) - PRIORITY
 	shortOrders := make([]execution.OrderRequest, 0, 2)
-	for _, leg := range s.position.Legs {
+	for _, leg := range pos.Legs {
 		if leg.Side != execution.Sell {
 			continue
 		}
 
 		var price float64
+		var found bool
 		for _, opt := range in.Snapshot.Options {
 			if opt.ProductID == leg.InstrumentID {
 				// Use more aggressive pricing for shorts - we MUST close these
 				price = parseFloat(opt.Quotes.BestAsk) * 1.02 // 2% buffer for urgency
+				found = true
 				break
 			}
 		}
 
+		if !found || price <= 0 {
+			// Fallback: use entry price with buffer if snapshot missing this option
+			price = leg.EntryPrice * 1.5
+			if price <= 0 {
+				price = 1.0 // Absolute minimum to avoid zero-price orders
+			}
+			log.Printf("⚠️ Iron Condor: No quote found for %s, using fallback price %.2f", leg.Symbol, price)
+		}
+
 		shortOrders = append(shortOrders, execution.OrderRequest{
-			ClientOrderID: execution.GenerateClientOrderID(s.position.StrategyID, leg.ID+"_close", now),
+			ClientOrderID: execution.GenerateClientOrderID(pos.StrategyID, leg.ID+"_close", now),
 			InstrumentID:  leg.InstrumentID,
 			Symbol:        leg.Symbol,
 			Side:          execution.Buy,
@@ -531,7 +546,7 @@ func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest
 			OrderType:     execution.Limit,
 			ReduceOnly:    true,
 			TimeInForce:   "ioc",
-			StrategyID:    s.position.StrategyID,
+			StrategyID:    pos.StrategyID,
 			LegID:         leg.ID + "_close",
 			Priority:      1, // Higher priority - close first
 		})
@@ -539,21 +554,32 @@ func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest
 
 	// Second: close longs (sell to close) - only after shorts are closed
 	longOrders := make([]execution.OrderRequest, 0, 2)
-	for _, leg := range s.position.Legs {
+	for _, leg := range pos.Legs {
 		if leg.Side != execution.Buy {
 			continue
 		}
 
 		var price float64
+		var found bool
 		for _, opt := range in.Snapshot.Options {
 			if opt.ProductID == leg.InstrumentID {
 				price = parseFloat(opt.Quotes.BestBid) * 0.99 // slight slippage buffer
+				found = true
 				break
 			}
 		}
 
+		if !found || price <= 0 {
+			// Fallback: use entry price with discount if snapshot missing
+			price = leg.EntryPrice * 0.5
+			if price <= 0 {
+				price = 0.01 // Minimum price for sell orders
+			}
+			log.Printf("⚠️ Iron Condor: No quote found for %s, using fallback price %.2f", leg.Symbol, price)
+		}
+
 		longOrders = append(longOrders, execution.OrderRequest{
-			ClientOrderID: execution.GenerateClientOrderID(s.position.StrategyID, leg.ID+"_close", now),
+			ClientOrderID: execution.GenerateClientOrderID(pos.StrategyID, leg.ID+"_close", now),
 			InstrumentID:  leg.InstrumentID,
 			Symbol:        leg.Symbol,
 			Side:          execution.Sell,
@@ -562,7 +588,7 @@ func (s *IronCondor) buildCloseOrderRequests(in Input) ([]execution.OrderRequest
 			OrderType:     execution.Limit,
 			ReduceOnly:    true,
 			TimeInForce:   "ioc",
-			StrategyID:    s.position.StrategyID,
+			StrategyID:    pos.StrategyID,
 			LegID:         leg.ID + "_close",
 			Priority:      2, // Lower priority - close after shorts
 		})

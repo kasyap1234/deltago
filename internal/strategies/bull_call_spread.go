@@ -3,6 +3,7 @@ package strategies
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/kiwhtas/deltago/internal/delta"
@@ -99,10 +100,17 @@ func (s *BullCallSpread) BuildEntryOrders(ctx context.Context, in Input) (*execu
 	now := time.Now()
 	strategyID := fmt.Sprintf("%s_%d", s.id, now.UnixMilli())
 
-	// BUY orders use BestAsk (price we pay sellers)
-	// SELL orders use BestBid (price buyers will pay us)
-	longPrice := parseFloat(longCall.Quotes.BestAsk)
-	shortPrice := parseFloat(shortCall.Quotes.BestBid)
+	// PostOnly pricing: place orders on the passive side to avoid immediate execution
+	// BUY orders: price at BestBid (join the bid queue)
+	// SELL orders: price at BestAsk (join the ask queue)
+	longPrice, err := parseFloatRequired(longCall.Quotes.BestBid, "long_call_best_bid")
+	if err != nil {
+		return nil, err
+	}
+	shortPrice, err := parseFloatRequired(shortCall.Quotes.BestAsk, "short_call_best_ask")
+	if err != nil {
+		return nil, err
+	}
 	netDebit := longPrice - shortPrice
 
 	// Price sanity check: long leg MUST be more expensive than short leg for a debit spread
@@ -315,13 +323,13 @@ func (s *BullCallSpread) Manage(ctx context.Context, in Input) ([]execution.Orde
 	// Take profit check
 	if pos.CurrentPnL >= pos.MaxProfit*s.TakeProfitPct {
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	// Regime change check - close if trend reverses
 	if in.Regime.Trend == regime.TrendDown || in.Regime.Stress == regime.StressCrash {
 		s.mu.Unlock()
-		return s.buildCloseOrderRequests(in)
+		return s.buildCloseOrderRequests(pos, in)
 	}
 
 	s.mu.Unlock()
@@ -329,56 +337,101 @@ func (s *BullCallSpread) Manage(ctx context.Context, in Input) ([]execution.Orde
 }
 
 func (s *BullCallSpread) BuildCloseOrders(ctx context.Context, in Input) (*execution.MultiLegOrder, error) {
-	orders, err := s.buildCloseOrderRequests(in)
+	pos := s.GetPosition()
+	if pos == nil {
+		return nil, fmt.Errorf("no position to close")
+	}
+
+	orders, err := s.buildCloseOrderRequests(pos, in)
 	if err != nil {
 		return nil, err
 	}
 
 	return &execution.MultiLegOrder{
-		StrategyID: s.position.StrategyID,
+		StrategyID: pos.StrategyID,
 		Legs:       orders,
 		Timeout:    30 * time.Second,
 		AllOrNone:  false, // Close as much as possible
 	}, nil
 }
 
-func (s *BullCallSpread) buildCloseOrderRequests(in Input) ([]execution.OrderRequest, error) {
-	if !s.HasPosition() {
-		return nil, fmt.Errorf("no position to close")
-	}
-
+func (s *BullCallSpread) buildCloseOrderRequests(pos *StrategyPosition, in Input) ([]execution.OrderRequest, error) {
 	var orders []execution.OrderRequest
 	now := time.Now()
 
-	for _, leg := range s.position.Legs {
-		closeSide := execution.Sell
-		if leg.Side == execution.Sell {
-			closeSide = execution.Buy
+	// First pass: close SHORT legs (buy to close) - PRIORITY
+	// Must close shorts first to avoid temporary naked short exposure
+	for _, leg := range pos.Legs {
+		if leg.Side != execution.Sell {
+			continue
 		}
 
 		var price float64
 		for _, opt := range in.Snapshot.Options {
 			if opt.ProductID == leg.InstrumentID {
-				if closeSide == execution.Buy {
-					price = parseFloat(opt.Quotes.BestAsk) // Use aggressive price for exits
-				} else {
-					price = parseFloat(opt.Quotes.BestBid)
-				}
+				price = parseFloat(opt.Quotes.BestAsk) // Use aggressive price for exits
 				break
 			}
 		}
 
+		if price <= 0 {
+			// Fallback: use entry price with buffer to ensure fill
+			price = leg.EntryPrice * 1.5 // Pay up to 50% more to close shorts
+			if price <= 0 {
+				price = 0.01 // Absolute minimum
+			}
+			log.Printf("⚠️ BullCallSpread: No quote for %s, using fallback price %.4f", leg.Symbol, price)
+		}
+
 		orders = append(orders, execution.OrderRequest{
-			ClientOrderID: execution.GenerateClientOrderID(s.position.StrategyID, leg.ID+"_close", now),
+			ClientOrderID: execution.GenerateClientOrderID(pos.StrategyID, leg.ID+"_close", now),
 			InstrumentID:  leg.InstrumentID,
 			Symbol:        leg.Symbol,
-			Side:          closeSide,
+			Side:          execution.Buy,
 			Qty:           leg.Qty,
 			Price:         price,
 			OrderType:     execution.Limit,
 			ReduceOnly:    true,
 			TimeInForce:   "ioc",
-			StrategyID:    s.position.StrategyID,
+			StrategyID:    pos.StrategyID,
+			LegID:         leg.ID + "_close",
+		})
+	}
+
+	// Second pass: close LONG legs (sell to close)
+	for _, leg := range pos.Legs {
+		if leg.Side != execution.Buy {
+			continue
+		}
+
+		var price float64
+		for _, opt := range in.Snapshot.Options {
+			if opt.ProductID == leg.InstrumentID {
+				price = parseFloat(opt.Quotes.BestBid)
+				break
+			}
+		}
+
+		if price <= 0 {
+			// Fallback: use entry price with buffer to ensure fill
+			price = leg.EntryPrice * 0.5 // Accept 50% less to close longs
+			if price <= 0 {
+				price = 0.01 // Absolute minimum
+			}
+			log.Printf("⚠️ BullCallSpread: No quote for %s, using fallback price %.4f", leg.Symbol, price)
+		}
+
+		orders = append(orders, execution.OrderRequest{
+			ClientOrderID: execution.GenerateClientOrderID(pos.StrategyID, leg.ID+"_close", now),
+			InstrumentID:  leg.InstrumentID,
+			Symbol:        leg.Symbol,
+			Side:          execution.Sell,
+			Qty:           leg.Qty,
+			Price:         price,
+			OrderType:     execution.Limit,
+			ReduceOnly:    true,
+			TimeInForce:   "ioc",
+			StrategyID:    pos.StrategyID,
 			LegID:         leg.ID + "_close",
 		})
 	}

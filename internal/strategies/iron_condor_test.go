@@ -58,7 +58,7 @@ func createTestOptionsCondor(spot float64) []delta.Ticker {
 }
 
 func TestIronCondor_ShouldEnter(t *testing.T) {
-	strategy := NewIronCondor(nil, 1, 0.25, 1)
+	strategy := NewIronCondor(nil, 1, 0.25, 1, false)
 	
 	baseInput := Input{
 		Regime: &regime.Regime{
@@ -145,7 +145,7 @@ func TestIronCondor_ShouldEnter(t *testing.T) {
 }
 
 func TestIronCondor_BuildEntryOrders(t *testing.T) {
-	strategy := NewIronCondor(nil, 1, 0.25, 1)
+	strategy := NewIronCondor(nil, 1, 0.25, 1, false)
 	options := createTestOptionsCondor(100.0)
 	
 	in := Input{
@@ -228,7 +228,7 @@ func TestIronCondor_BuildEntryOrders(t *testing.T) {
 }
 
 func TestIronCondor_ConfirmEntry(t *testing.T) {
-	strategy := NewIronCondor(nil, 1, 0.25, 1)
+	strategy := NewIronCondor(nil, 1, 0.25, 1, false)
 	now := time.Now()
 
 	// Use leg IDs that match the strategy code: "sc", "sp", "lc", "lp"
@@ -290,7 +290,7 @@ func TestIronCondor_ConfirmEntry(t *testing.T) {
 }
 
 func TestIronCondor_Manage(t *testing.T) {
-	strategy := NewIronCondor(nil, 1, 0.25, 1)
+	strategy := NewIronCondor(nil, 1, 0.25, 1, false)
 
 	// Use leg IDs that match the strategy code: "sc", "sp", "lc", "lp"
 	// All values need to account for the 0.001 multiplier
